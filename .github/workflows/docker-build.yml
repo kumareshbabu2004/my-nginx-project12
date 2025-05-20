@@ -2,7 +2,7 @@ name: Build, Push, Deploy with Rollback
 
 on:
   push:
-    branches: [ main, master ]  # Trigger on push to main or master
+    branches: [ main, master ]  
 
 jobs:
   build:
@@ -20,7 +20,7 @@ jobs:
       run: docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
 
   push:
-    name: 📦 Push to Docker Hub
+    name: Push to Docker Hub
     needs: build
     runs-on: ubuntu-latest
 
@@ -32,7 +32,7 @@ jobs:
       run: docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   deploy:
-    name: 🚀 Deploy to Server
+    name: Deploy to Server
     needs: push
     runs-on: ubuntu-latest
 
@@ -47,10 +47,10 @@ jobs:
           docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
           docker stop myapp || true
           docker rm myapp || true
-          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+          docker run -d --name myapp -p 80:81 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   rollback:
-    name: 🔁 Rollback on Failure
+    name:  Rollback on Failure
     needs: deploy
     if: failure()
     runs-on: ubuntu-latest
@@ -66,5 +66,5 @@ jobs:
           echo "Deployment failed. Rolling back to previous stable image..."
           docker stop myapp || true
           docker rm myapp || true
-          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:rollback
+          docker run -d --name myapp -p 80:81 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:rollback
 
