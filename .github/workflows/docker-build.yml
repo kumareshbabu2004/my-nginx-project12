@@ -2,7 +2,7 @@ name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
 
 env:
   IMAGE_NAME: kumaresh11/my-nginx-app
@@ -111,7 +111,9 @@ jobs:
       - name: Send Success Email
         if: success()
         run: |
-          echo -e "Subject: SUCCESS: Deployment of $IMAGE_NAME\nTo: ${{ secrets.TO_EMAIL }}\n\nDeployment succeeded for commit ${{ github.sha }}." > mail.txt
+          SUBJECT="SUCCESS: Deployment of $IMAGE_NAME"
+          BODY="Deployment succeeded for commit ${{ github.sha }}."
+          echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
 
           curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
             --mail-from "${{ secrets.GMAIL_USER }}" \
@@ -123,7 +125,9 @@ jobs:
       - name: Send Failure Email
         if: failure()
         run: |
-          echo -e "Subject: FAILURE: Deployment of $IMAGE_NAME\nTo: ${{ secrets.TO_EMAIL }}\n\nDeployment failed for commit ${{ github.sha }}." > mail.txt
+          SUBJECT="FAILURE: Deployment of $IMAGE_NAME"
+          BODY="Deployment failed for commit ${{ github.sha }}."
+          echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
 
           curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
             --mail-from "${{ secrets.GMAIL_USER }}" \
