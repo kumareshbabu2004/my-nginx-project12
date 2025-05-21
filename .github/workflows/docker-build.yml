@@ -10,13 +10,14 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get_version.outputs.version }}
+      previous_version: ${{ steps.save_prev.outputs.previous_version }}
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Get Latest Docker Tag and Increment Patch Version
-        id: get_version
+      - id: get_version
+        name: Get Latest Docker Tag and Increment Patch Version
         run: |
           REPO="${{ secrets.DOCKER_USERNAME }}/my-nginx-app"
           echo "Fetching tags for $REPO"
@@ -38,12 +39,28 @@ jobs:
           echo "New tag is $NEW_TAG"
           echo "version=$NEW_TAG" >> $GITHUB_OUTPUT
 
-      - name: Save Previous Version for Rollback
-        id: save_prev
+      - id: save_prev
+        name: Save Previous Version for Rollback
         run: |
           # Save previous version tag (or fallback to v1.0.0)
-          PREV_TAG="${LATEST_TAG:-v1.0.0}"
+          PREV_TAG="${{ steps.get_version.outputs.version }}"
+          if [ "$PREV_TAG" == "v1.0.0" ]; then
+            # If this is first tag, no previous version exists
+            PREV_TAG="v1.0.0"
+          else
+            # If new version is vX.Y.Z, previous is vX.Y.(Z-1)
+            VERSION=${PREV_TAG#v}
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+            PATCH=$((PATCH - 1))
+            if [ $PATCH -lt 0 ]; then
+              PATCH=0
+            fi
+            PREV_TAG="v$MAJOR.$MINOR.$PATCH"
+          fi
           echo "previous_version=$PREV_TAG" >> $GITHUB_OUTPUT
+
+      - name: Write previous version to file
+        run: echo "${{ steps.save_prev.outputs.previous_version }}" > prev_version.txt
 
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
@@ -67,9 +84,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: prev-version
-          path: |
-            echo "${{ steps.save_prev.outputs.previous_version }}" > prev_version.txt
-            prev_version.txt
+          path: prev_version.txt
 
   push:
     name: 📦 Push to Docker Hub
@@ -137,8 +152,8 @@ jobs:
         with:
           name: prev-version
 
-      - name: Read Previous Version Tag
-        id: read_prev
+      - id: read_prev
+        name: Read Previous Version Tag
         run: |
           PREV_TAG=$(cat prev_version.txt)
           echo "previous_version=$PREV_TAG" >> $GITHUB_OUTPUT
