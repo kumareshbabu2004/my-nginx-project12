@@ -2,54 +2,11 @@ name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
   push:
-    branches: [main]
-
-env:
-  IMAGE_NAME: kumaresh11/my-nginx-app
+    branches: [main, master]
 
 jobs:
-  bump-version:
-    name: ⬆️ Bump Version
-    runs-on: ubuntu-latest
-    outputs:
-      new_tag: ${{ steps.bump.outputs.new_tag }}
-      old_tag: ${{ steps.bump.outputs.old_tag }}
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-
-      - name: Bump Docker Image Version and Push
-        id: bump
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
-        run: |
-          git config --global user.name 'GitHub Actions'
-          git config --global user.email 'actions@github.com'
-
-          if [ ! -f version.txt ]; then echo "v1.0" > version.txt; fi
-          CURRENT_TAG=$(cat version.txt)
-          VERSION_NUMBER=$(echo $CURRENT_TAG | cut -d 'v' -f2)
-          MAJOR=$(echo $VERSION_NUMBER | cut -d '.' -f1)
-          MINOR=$(echo $VERSION_NUMBER | cut -d '.' -f2)
-          NEW_MINOR=$((MINOR + 1))
-          NEW_TAG="v${MAJOR}.${NEW_MINOR}"
-
-          echo "Old Tag: $CURRENT_TAG"
-          echo "New Tag: $NEW_TAG"
-
-          echo $NEW_TAG > version.txt
-
-          git add version.txt
-          git commit -m "Bump version to $NEW_TAG"
-          git push https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} HEAD:main
-
-          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
-          echo "old_tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
-
   build:
     name: 🛠️ Build Docker Image
-    needs: bump-version
     runs-on: ubuntu-latest
 
     steps:
@@ -59,50 +16,75 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Build and Tag Docker Image
-        run: |
-          docker build -t $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }} .
-          docker tag $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }} $IMAGE_NAME:latest
+      - name: Build Docker Image
+        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
+
+      - name: Save Docker Image as Tarball
+        run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest -o my-nginx-app.tar
+
+      - name: Upload Docker Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: my-nginx-app.tar
+
+  push:
+    name: 📦 Push to Docker Hub
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Docker Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker Image
+        run: docker load -i my-nginx-app.tar
+
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
       - name: Push Docker Image
-        run: |
-          docker push $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }}
-          docker push $IMAGE_NAME:latest
+        run: docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   deploy:
-    name: 🚀 Deploy
-    needs: build
+    name: 🚀 Deploy Locally
+    needs: push
     runs-on: self-hosted
-    continue-on-error: true
 
     steps:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Deploy Container
+      - name: Pull and Run Latest Image
         run: |
+          echo "Pulling latest image..."
+          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+
+          echo "Stopping and removing current container if exists..."
           docker stop myapp || true
           docker rm myapp || true
-          docker pull $IMAGE_NAME:latest
-          docker run -d --name myapp -p 81:80 $IMAGE_NAME:latest
+
+          echo "Running new container on port 81..."
+          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   rollback:
     name: 🔁 Rollback on Failure
-    needs: [deploy, bump-version]
+    needs: deploy
     if: failure()
     runs-on: self-hosted
 
     steps:
       - name: Rollback to Previous Version
         run: |
-          echo "Deployment failed. Rolling back to ${{ needs.bump-version.outputs.old_tag }}..."
+          echo "Deployment failed. Rolling back..."
           docker stop myapp || true
           docker rm myapp || true
-          docker pull $IMAGE_NAME:${{ needs.bump-version.outputs.old_tag }}
-          docker run -d --name myapp -p 81:80 $IMAGE_NAME:${{ needs.bump-version.outputs.old_tag }}
+          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:rollback
 
   notify:
-    name: 📧 Notify
+    name: 📧 Send Email Notification
     needs: deploy
     runs-on: ubuntu-latest
     if: always()
@@ -111,8 +93,10 @@ jobs:
       - name: Send Success Email
         if: success()
         run: |
-          SUBJECT="SUCCESS: Deployment of $IMAGE_NAME"
-          BODY="Deployment succeeded for commit ${{ github.sha }}."
+          SUBJECT="GitHub Actions SUCCESS: ${{ github.workflow }} #${{ github.run_number }}"
+          BODY="SUCCESS: Deployment succeeded for commit ${{ github.sha }} in repository ${{ github.repository }}.
+          Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
           echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
 
           curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
@@ -125,8 +109,10 @@ jobs:
       - name: Send Failure Email
         if: failure()
         run: |
-          SUBJECT="FAILURE: Deployment of $IMAGE_NAME"
-          BODY="Deployment failed for commit ${{ github.sha }}."
+          SUBJECT="GitHub Actions FAILURE: ${{ github.workflow }} #${{ github.run_number }}"
+          BODY="FAILURE: Deployment failed for commit ${{ github.sha }} in repository ${{ github.repository }}.
+          Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
           echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
 
           curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
@@ -135,3 +121,4 @@ jobs:
             --upload-file mail.txt \
             --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
             --insecure
+
