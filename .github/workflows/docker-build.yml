@@ -10,13 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get_version.outputs.version }}
-      previous_version: ${{ steps.get_version.outputs.previous_version }}
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Get Latest Docker Tag and Increment Version
+      - name: Get Latest Docker Tag and Increment Patch Version
         id: get_version
         run: |
           REPO="${{ secrets.DOCKER_USERNAME }}/my-nginx-app"
@@ -25,21 +24,24 @@ jobs:
           LATEST_TAG=$(curl -s "https://registry.hub.docker.com/v2/repositories/$REPO/tags?page_size=100" | \
             jq -r '.results[].name' | grep '^v' | sort -V | tail -n1)
 
-          echo "Latest tag: $LATEST_TAG"
+          echo "Latest tag is $LATEST_TAG"
 
           if [[ -z "$LATEST_TAG" ]]; then
-            NEW_TAG="v1.0"
-            PREV_TAG="v0.0"
+            NEW_TAG="v1.0.0"
           else
-            PREV_TAG=$LATEST_TAG
             VERSION=${LATEST_TAG#v}
-            IFS='.' read -r MAJOR MINOR <<< "$VERSION"
-            MINOR=$((MINOR + 1))
-            NEW_TAG="v$MAJOR.$MINOR"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+            PATCH=$((PATCH + 1))
+            NEW_TAG="v$MAJOR.$MINOR.$PATCH"
           fi
 
-          echo "New tag: $NEW_TAG"
+          echo "New tag is $NEW_TAG"
           echo "version=$NEW_TAG" >> $GITHUB_OUTPUT
+
+      - name: Save Previous Version for Rollback
+        id: save_prev
+        run: |
+          PREV_TAG="${LATEST_TAG:-v1.0.0}"
           echo "previous_version=$PREV_TAG" >> $GITHUB_OUTPUT
 
       - name: Log in to Docker Hub
@@ -61,11 +63,12 @@ jobs:
           path: my-nginx-app.tar
 
       - name: Upload Previous Version Artifact
-        run: echo "${{ steps.get_version.outputs.previous_version }}" > prev_version.txt
-      - uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4
         with:
           name: prev-version
-          path: prev_version.txt
+          path: |
+            echo "${{ steps.save_prev.outputs.previous_version }}" > prev_version.txt
+            prev_version.txt
 
   push:
     name: 📦 Push to Docker Hub
@@ -92,6 +95,9 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
+      - name: Tag image as latest (before push)
+        run: docker tag ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.version }} ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+
       - name: Push Docker Images (versioned & latest)
         run: |
           docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.version }}
@@ -108,14 +114,9 @@ jobs:
 
       - name: Pull and Run Latest Image
         run: |
-          echo "Pulling latest image..."
           docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
-
-          echo "Stopping and removing current container if exists..."
           docker stop myapp || true
           docker rm myapp || true
-
-          echo "Running new container on port 81..."
           docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   rollback:
@@ -141,12 +142,9 @@ jobs:
 
       - name: Rollback to Previous Version
         run: |
-          echo "Deployment failed. Rolling back to ${{ steps.read_prev.outputs.previous_version }}..."
           docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.read_prev.outputs.previous_version }} || true
-
           docker stop myapp || true
           docker rm myapp || true
-
           docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.read_prev.outputs.previous_version }}
 
   notify:
