@@ -1,9 +1,18 @@
 name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
-  workflow_dispatch:   # manual trigger, you can trigger rollback via inputs
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      rollback:
+        description: 'Do rollback? (true/false)'
+        required: false
+        default: 'false'
+      rollback_version:
+        description: 'Rollback version (e.g. v1.5)'
+        required: false
+        default: ''
 
 env:
   DOCKER_IMAGE: kumaresh11/nginx-pipeline
@@ -18,13 +27,12 @@ jobs:
       version: ${{ steps.set_version.outputs.version }}
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Set Docker image version
         id: set_version
         run: |
-          echo "BUILD_NUMBER=${{ github.run_number }}"
           VERSION="v1.${{ github.run_number }}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
@@ -32,18 +40,15 @@ jobs:
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
       - name: Build Docker Image
-        run: |
-          docker build -t $DOCKER_IMAGE:${{ steps.set_version.outputs.version }} .
+        run: docker build -t $DOCKER_IMAGE:${{ steps.set_version.outputs.version }} .
 
       - name: Push Docker Image
-        run: |
-          docker push $DOCKER_IMAGE:${{ steps.set_version.outputs.version }}
+        run: docker push $DOCKER_IMAGE:${{ steps.set_version.outputs.version }}
 
   deploy:
     name: Deploy Docker Container
     needs: build_and_push
     runs-on: self-hosted
-
     steps:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
@@ -54,39 +59,38 @@ jobs:
           docker rm nginx-container || true
 
       - name: Run New Container
-        run: |
-          docker run -d --name nginx-container -p 80:80 ${{ env.DOCKER_IMAGE }}:${{ needs.build_and_push.outputs.version }}
+        run: docker run -d --name nginx-container -p 80:80 $DOCKER_IMAGE:${{ needs.build_and_push.outputs.version }}
 
   rollback:
-    name: Rollback Container (manual)
+    name: Rollback Docker Container (Manual)
     runs-on: self-hosted
-    if: github.event_name == 'workflow_dispatch' && contains(github.event.inputs.rollback, 'true')
-
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.rollback == 'true'
     steps:
-      - name: Rollback Prompt and Run
-        id: rollback
-        run: |
-          # Read rollback_version input
-          echo "Rollback version: ${{ github.event.inputs.rollback_version }}"
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
+      - name: Rollback to Specified Version
+        run: |
           if [ -z "${{ github.event.inputs.rollback_version }}" ]; then
-            echo "Rollback version is empty. Exiting."
+            echo "Rollback version not specified. Exiting."
             exit 1
           fi
-
+          echo "Rolling back to version: ${{ github.event.inputs.rollback_version }}"
           docker stop nginx-container || true
           docker rm nginx-container || true
-          docker run -d --name nginx-container -p 80:80 ${{ env.DOCKER_IMAGE }}:${{ github.event.inputs.rollback_version }}
+          docker run -d --name nginx-container -p 80:80 $DOCKER_IMAGE:${{ github.event.inputs.rollback_version }}
 
   notify:
     name: Send Email Notification
     needs: [build_and_push, deploy]
     runs-on: ubuntu-latest
     if: always()
-
+    env:
+      GMAIL_USER: ${{ secrets.GMAIL_USER }}
+      GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
+      TO_EMAIL: ${{ env.TO_EMAIL }}
     steps:
       - name: Prepare email content
-        id: email
         run: |
           STATUS="SUCCESS"
           if [[ "${{ job.status }}" != "success" ]]; then
@@ -97,13 +101,13 @@ jobs:
 Version: ${{ needs.build_and_push.outputs.version }}
 Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          echo -e "Subject: $SUBJECT\nTo: ${{ env.TO_EMAIL }}\n\n$BODY" > mail.txt
+          echo -e "Subject: $SUBJECT\nTo: $TO_EMAIL\n\n$BODY" > mail.txt
 
       - name: Send email via Gmail SMTP
         run: |
-          curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
-            --mail-from "${{ env.GMAIL_USER }}" \
-            --mail-rcpt "${{ env.TO_EMAIL }}" \
+          curl --url "smtps://smtp.gmail.com:465" --ssl-reqd \
+            --mail-from "$GMAIL_USER" \
+            --mail-rcpt "$TO_EMAIL" \
             --upload-file mail.txt \
-            --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
+            --user "$GMAIL_USER:$GMAIL_PASS" \
             --insecure
