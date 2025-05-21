@@ -1,21 +1,24 @@
-name: Build, Push, Deploy with Auto Tag, Rollback, and Email
+name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
   push:
     branches: [main, master]
 
+permissions:
+  contents: write  # Needed for pushing version.txt
+
 jobs:
-  build:
+  bump-version:
+    name: 🔢 Bump Docker Tag
     runs-on: ubuntu-latest
     outputs:
       new_tag: ${{ steps.bump.outputs.new_tag }}
       old_tag: ${{ steps.bump.outputs.old_tag }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Read & Bump Version
+      - name: Bump Version
         id: bump
         run: |
           CURRENT_TAG=$(cat version.txt)
@@ -30,92 +33,112 @@ jobs:
           echo "New Tag: $NEW_TAG"
 
           echo $NEW_TAG > version.txt
-
           echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
           echo "old_tag=$OLD_TAG" >> $GITHUB_OUTPUT
 
-      - name: Commit New Version
+      - name: Commit & Push updated version.txt
         run: |
-          git config --global user.name 'kumareshbabu2004'
-          git config --global user.email 'rgraina8@gmail.com'
-          git commit -am "Bump version to ${{ steps.bump.outputs.new_tag }}"
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add version.txt
+          git commit -m "Bump version to ${{ steps.bump.outputs.new_tag }}" || echo "No changes"
           git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: 🛠️ Build Docker Image
+    needs: bump-version
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
       - name: Build Docker Image
         run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.bump.outputs.new_tag }} .
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
+          docker tag ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.bump-version.outputs.new_tag }}
 
-      - name: Save Docker Image
-        run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.bump.outputs.new_tag }} -o app.tar
+      - name: Save Docker Image as Tarball
+        run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.bump-version.outputs.new_tag }} -o my-nginx-app.tar
 
-      - name: Upload Docker Image
+      - name: Upload Docker Image Artifact
         uses: actions/upload-artifact@v4
         with:
           name: docker-image
-          path: app.tar
+          path: my-nginx-app.tar
 
   push:
-    runs-on: ubuntu-latest
+    name: 📦 Push to Docker Hub
     needs: build
+    runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download Docker Image Artifact
+        uses: actions/download-artifact@v4
         with:
           name: docker-image
 
       - name: Load Docker Image
-        run: docker load -i app.tar
+        run: docker load -i my-nginx-app.tar
 
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Push Image to Docker Hub
-        run: docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.new_tag }}
+      - name: Push Docker Image
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.bump-version.outputs.new_tag }}
+          docker tag ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.bump-version.outputs.new_tag }} ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+          docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   deploy:
-    runs-on: self-hosted
+    name: 🚀 Deploy to Self-Hosted
     needs: push
-    outputs:
-      deploy_status: ${{ steps.status.outcome }}
+    runs-on: self-hosted
 
     steps:
-      - name: Deploy New Image
-        id: status
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Pull and Deploy Latest
         run: |
-          set -e
-          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.new_tag }}
+          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
           docker stop myapp || true
           docker rm myapp || true
-          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.new_tag }}
+          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   rollback:
-    runs-on: self-hosted
-    needs: [deploy, build]
+    name: 🔁 Rollback if Deploy Fails
+    needs: [deploy, bump-version]
     if: failure()
+    runs-on: self-hosted
 
     steps:
       - name: Rollback to Previous Version
         run: |
-          echo "Rolling back to previous version: ${{ needs.build.outputs.old_tag }}"
-          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.old_tag }}
+          echo "Deployment failed. Rolling back to ${{ needs.bump-version.outputs.old_tag }}"
+          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.bump-version.outputs.old_tag }}
           docker stop myapp || true
           docker rm myapp || true
-          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.old_tag }}
+          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.bump-version.outputs.old_tag }}
 
   notify:
-    runs-on: ubuntu-latest
+    name: 📧 Email Notification
     needs: deploy
+    runs-on: ubuntu-latest
     if: always()
 
     steps:
-      - name: Send Notification
+      - name: Send Email
         run: |
           STATUS="${{ job.status }}"
           SUBJECT="GitHub Actions $STATUS: ${{ github.workflow }} #${{ github.run_number }}"
-          BODY="$STATUS: Workflow run for commit ${{ github.sha }}\nRepository: ${{ github.repository }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY="$STATUS: Deployment $STATUS for commit ${{ github.sha }} in repo ${{ github.repository }}.
+          Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
 
