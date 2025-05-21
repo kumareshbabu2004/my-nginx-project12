@@ -9,46 +9,43 @@ env:
 
 jobs:
   bump-version:
-    name: ⬆️ Bump Version
-    runs-on: ubuntu-latest
-    outputs:
-      new_tag: ${{ steps.bump.outputs.new_tag }}
-      old_tag: ${{ steps.bump.outputs.old_tag }}
+  name: ⬆️ Bump Version
+  runs-on: ubuntu-latest
+  outputs:
+    new_tag: ${{ steps.bump.outputs.new_tag }}
+    old_tag: ${{ steps.bump.outputs.old_tag }}
 
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
+  steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
 
-      - name: Bump Docker Image Version
-        id: bump
-        run: |
-          git config --global user.name 'GitHub Actions'
-          git config --global user.email 'actions@github.com'
+    - name: Bump Docker Image Version and Push
+      id: bump
+      env:
+        GH_PAT: ${{ secrets.GH_PAT }}
+      run: |
+        git config --global user.name 'GitHub Actions'
+        git config --global user.email 'actions@github.com'
 
-          # Make sure the repo is up to date to avoid push conflicts
-          git pull origin main || true
+        if [ ! -f version.txt ]; then echo "v1.0" > version.txt; fi
+        CURRENT_TAG=$(cat version.txt)
+        VERSION_NUMBER=$(echo $CURRENT_TAG | cut -d 'v' -f2)
+        MAJOR=$(echo $VERSION_NUMBER | cut -d '.' -f1)
+        MINOR=$(echo $VERSION_NUMBER | cut -d '.' -f2)
+        NEW_MINOR=$((MINOR + 1))
+        NEW_TAG="v${MAJOR}.${NEW_MINOR}"
 
-          # Initialize version.txt if missing
-          if [ ! -f version.txt ]; then echo "v1.0" > version.txt; fi
+        echo "Old Tag: $CURRENT_TAG"
+        echo "New Tag: $NEW_TAG"
 
-          CURRENT_TAG=$(cat version.txt)
-          VERSION_NUMBER=$(echo $CURRENT_TAG | cut -d 'v' -f2)
-          MAJOR=$(echo $VERSION_NUMBER | cut -d '.' -f1)
-          MINOR=$(echo $VERSION_NUMBER | cut -d '.' -f2)
-          NEW_MINOR=$((MINOR + 1))
-          NEW_TAG="v${MAJOR}.${NEW_MINOR}"
+        echo $NEW_TAG > version.txt
 
-          echo "Old Tag: $CURRENT_TAG"
-          echo "New Tag: $NEW_TAG"
+        git add version.txt
+        git commit -m "Bump version to $NEW_TAG"
+        git push https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} HEAD:main
 
-          echo $NEW_TAG > version.txt
-
-          git add version.txt
-          git commit -m "Bump version to $NEW_TAG"
-          git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }} HEAD:main
-
-          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
-          echo "old_tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
+        echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+        echo "old_tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
 
   build:
     name: 🛠️ Build Docker Image
