@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get_version.outputs.version }}
+      previous_version: ${{ steps.save_prev.outputs.previous_version }}
 
     steps:
       - name: Checkout Code
@@ -41,8 +42,12 @@ jobs:
       - name: Save Previous Version for Rollback
         id: save_prev
         run: |
+          # Save previous version tag or fallback to v1.0.0
           PREV_TAG="${LATEST_TAG:-v1.0.0}"
           echo "previous_version=$PREV_TAG" >> $GITHUB_OUTPUT
+
+      - name: Create previous version file
+        run: echo "${{ steps.save_prev.outputs.previous_version }}" > prev_version.txt
 
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
@@ -66,9 +71,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: prev-version
-          path: |
-            echo "${{ steps.save_prev.outputs.previous_version }}" > prev_version.txt
-            prev_version.txt
+          path: prev_version.txt
 
   push:
     name: 📦 Push to Docker Hub
@@ -95,9 +98,6 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Tag image as latest (before push)
-        run: docker tag ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.version }} ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
-
       - name: Push Docker Images (versioned & latest)
         run: |
           docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.version }}
@@ -114,9 +114,14 @@ jobs:
 
       - name: Pull and Run Latest Image
         run: |
+          echo "Pulling latest image..."
           docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+
+          echo "Stopping and removing current container if exists..."
           docker stop myapp || true
           docker rm myapp || true
+
+          echo "Running new container on port 81..."
           docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   rollback:
@@ -142,14 +147,17 @@ jobs:
 
       - name: Rollback to Previous Version
         run: |
+          echo "Deployment failed. Rolling back to ${{ steps.read_prev.outputs.previous_version }}..."
           docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.read_prev.outputs.previous_version }} || true
+
           docker stop myapp || true
           docker rm myapp || true
+
           docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.read_prev.outputs.previous_version }}
 
   notify:
     name: 📧 Send Email Notification
-    needs: deploy
+    needs: [deploy, rollback]
     runs-on: ubuntu-latest
     if: always()
 
