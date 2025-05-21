@@ -9,18 +9,45 @@ jobs:
     name: 🛠️ Build Docker Image
     runs-on: ubuntu-latest
 
+    outputs:
+      new_tag: ${{ steps.set_tag.outputs.new_tag }}
+      previous_tag: ${{ steps.set_tag.outputs.previous_tag }}
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
+      - name: Set Docker Tag
+        id: set_tag
+        run: |
+          echo "Fetching existing tags..."
+          tags=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/my-nginx-app/tags?page_size=100" | jq -r '.results[].name' | grep -E '^v[0-9]+\.[0-9]+$' | sort -V)
+
+          latest_tag=$(echo "$tags" | tail -n 1)
+          if [[ -z "$latest_tag" ]]; then
+            new_tag="v1.0"
+            previous_tag="v1.0"
+          else
+            major=$(echo $latest_tag | cut -d. -f1 | tr -d v)
+            minor=$(echo $latest_tag | cut -d. -f2)
+            new_minor=$((minor + 1))
+            new_tag="v${major}.${new_minor}"
+            previous_tag="$latest_tag"
+          fi
+
+          echo "new_tag=$new_tag" >> $GITHUB_OUTPUT
+          echo "previous_tag=$previous_tag" >> $GITHUB_OUTPUT
+
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Build Docker Image
-        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
+      - name: Build Docker Image with Tags
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest \
+                       -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.set_tag.outputs.new_tag }} .
 
       - name: Save Docker Image as Tarball
-        run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest -o my-nginx-app.tar
+        run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.set_tag.outputs.new_tag }} -o my-nginx-app.tar
 
       - name: Upload Docker Image Artifact
         uses: actions/upload-artifact@v4
@@ -46,10 +73,13 @@ jobs:
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
       - name: Push Docker Image
-        run: docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.new_tag }}
+          docker tag ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.new_tag }} ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+          docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   deploy:
-    name: 🚀 Deploy Locally
+    name: 🚀 Deploy Application
     needs: push
     runs-on: self-hosted
 
@@ -57,17 +87,12 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Pull and Run Latest Image
+      - name: Deploy Latest Image
         run: |
-          echo "Pulling latest image..."
-          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
-
-          echo "Stopping and removing current container if exists..."
+          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.new_tag }}
           docker stop myapp || true
           docker rm myapp || true
-
-          echo "Running new container on port 81..."
-          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.new_tag }}
 
   rollback:
     name: 🔁 Rollback on Failure
@@ -78,39 +103,29 @@ jobs:
     steps:
       - name: Rollback to Previous Version
         run: |
-          echo "Deployment failed. Rolling back..."
+          echo "Rolling back to ${{ needs.build.outputs.previous_tag }}..."
+          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.previous_tag }}
           docker stop myapp || true
           docker rm myapp || true
-          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:rollback
+          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.previous_tag }}
 
   notify:
     name: 📧 Send Email Notification
-    needs: deploy
+    needs: [deploy, rollback]
     runs-on: ubuntu-latest
     if: always()
 
     steps:
-      - name: Send Success Email
-        if: success()
+      - name: Send Email Notification
         run: |
-          SUBJECT="GitHub Actions SUCCESS: ${{ github.workflow }} #${{ github.run_number }}"
-          BODY="SUCCESS: Deployment succeeded for commit ${{ github.sha }} in repository ${{ github.repository }}.
-          Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [[ "${{ needs.deploy.result }}" == "success" ]]; then
+            STATUS="SUCCESS"
+          else
+            STATUS="FAILURE"
+          fi
 
-          echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
-
-          curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
-            --mail-from "${{ secrets.GMAIL_USER }}" \
-            --mail-rcpt "${{ secrets.TO_EMAIL }}" \
-            --upload-file mail.txt \
-            --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
-            --insecure
-
-      - name: Send Failure Email
-        if: failure()
-        run: |
-          SUBJECT="GitHub Actions FAILURE: ${{ github.workflow }} #${{ github.run_number }}"
-          BODY="FAILURE: Deployment failed for commit ${{ github.sha }} in repository ${{ github.repository }}.
+          SUBJECT="GitHub Actions $STATUS: ${{ github.workflow }} #${{ github.run_number }}"
+          BODY="$STATUS: Deployment status for commit ${{ github.sha }} in repository ${{ github.repository }}.
           Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
