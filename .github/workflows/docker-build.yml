@@ -19,7 +19,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Bump version
+            - name: Bump version
         id: set_version
         run: |
           git config --global user.name 'GitHub Actions'
@@ -40,7 +40,7 @@ jobs:
 
           git add version.txt
           git commit -m "Bump version to $NEW_TAG"
-
+          
           # Authenticated push using PAT
           git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }} HEAD:main
 
