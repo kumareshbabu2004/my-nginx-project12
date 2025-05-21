@@ -36,8 +36,8 @@ jobs:
 
       - name: Commit New Version
         run: |
-          git config --global user.name 'github-actions'
-          git config --global user.email 'github-actions@github.com'
+          git config --global user.name 'kumareshbabu2004'
+          git config --global user.email 'rgraina8@gmail.com'
           git commit -am "Bump version to ${{ steps.bump.outputs.new_tag }}"
           git push
 
