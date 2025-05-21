@@ -1,84 +1,101 @@
-name: Build, Push, Deploy Locally with Rollback
+name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
   push:
-    branches: [ main, master ]
+    branches:
+      - main
+      - master
+
+env:
+  DOCKER_IMAGE: kumaresh11/nginx-pipeline
+  GMAIL_USER: rgkumar1233@gmail.com
+  GMAIL_PASS: ${{ secrets.GMAIL_APP_PASSWORD }}
+  TO_EMAIL: rgkumar1233@gmail.com
 
 jobs:
   build:
-    name: 🛠️ Build Docker Image
+    name: Build Docker Image
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
+    - name: Checkout Code
+      uses: actions/checkout@v3
 
-      - name: Log in to Docker Hub
-        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+    - name: Set Version
+      id: version
+      run: echo "VERSION=v1.${{ github.run_number }}" >> $GITHUB_ENV
 
-      - name: Build Docker Image
-        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
+    - name: Log in to Docker Hub
+      run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Save Docker Image as Tarball
-        run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest -o my-nginx-app.tar
+    - name: Build Docker Image
+      run: docker build -t ${{ env.DOCKER_IMAGE }}:${{ env.VERSION }} .
 
-      - name: Upload Docker Image Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: docker-image
-          path: my-nginx-app.tar
-
-  push:
-    name: 📦 Push to Docker Hub
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Download Docker Image Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-image
-
-      - name: Load Docker Image
-        run: docker load -i my-nginx-app.tar
-
-      - name: Log in to Docker Hub
-        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-      - name: Push Docker Image
-        run: docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+    - name: Push Docker Image
+      run: docker push ${{ env.DOCKER_IMAGE }}:${{ env.VERSION }}
 
   deploy:
-    name: 🚀 Deploy Locally
-    needs: push
+    name: Deploy Locally
+    needs: build
     runs-on: self-hosted
 
     steps:
-      - name: Log in to Docker Hub
-        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+    - name: Log in to Docker Hub
+      run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Pull and Run Latest Image
-        run: |
-          echo "Pulling latest image..."
-          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+    - name: Stop and remove current container (if exists)
+      run: |
+        docker stop nginx-container || true
+        docker rm nginx-container || true
 
-          echo "Stopping and removing current container if exists..."
-          docker stop myapp || true
-          docker rm myapp || true
+    - name: Run new container
+      run: docker run -d --name nginx-container -p 80:80 ${{ env.DOCKER_IMAGE }}:${{ env.VERSION }}
 
-          echo "Running new container on port 81..."
-          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+    - name: Ask for rollback
+      id: rollback
+      uses: peter-evans/slash-command-dispatch@v2
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        reaction-token: ${{ secrets.GITHUB_TOKEN }}
+        commands: rollback
+        permission: write
 
-  rollback:
-    name: 🔁 Rollback on Failure
-    needs: deploy
-    if: failure()
-    runs-on: self-hosted
+    - name: Manual Rollback Input
+      if: ${{ github.event.comment.body == '/rollback' }}
+      run: |
+        echo "Rollback requested, but GitHub Actions doesn't support interactive input. Use issue/pr comments or dispatch events for rollback."
+
+  notify:
+    name: Send Email Notification
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    if: always()
 
     steps:
-      - name: Rollback to Previous Version
-        run: |
-          echo "Deployment failed. Rolling back..."
-          docker stop myapp || true
-          docker rm myapp || true
-          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:rollback
+    - name: Prepare Email Body
+      run: |
+        if [[ "${{ needs.deploy.result }}" == "success" ]]; then
+          STATUS="SUCCESS"
+        elif [[ "${{ needs.deploy.result }}" == "failure" ]]; then
+          STATUS="FAILURE"
+        else
+          STATUS="ABORTED"
+        fi
+
+        cat <<EOF > mail.txt
+Subject: Jenkins ${STATUS}: ${{ github.workflow }} #${{ github.run_number }}
+To: ${{ env.TO_EMAIL }}
+From: ${{ env.GMAIL_USER }}
+
+${STATUS}: GitHub Actions Workflow '${{ github.workflow }}' run #${{ github.run_number }} has completed.
+Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+EOF
+
+    - name: Send Email via SMTP (Gmail)
+      run: |
+        curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
+          --mail-from "${{ env.GMAIL_USER }}" \
+          --mail-rcpt "${{ env.TO_EMAIL }}" \
+          --upload-file mail.txt \
+          --user "${{ env.GMAIL_USER }}:${{ env.GMAIL_PASS }}" \
+          --insecure
