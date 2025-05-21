@@ -2,7 +2,7 @@ name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
 
 jobs:
   build:
@@ -85,17 +85,19 @@ jobs:
 
   notify:
     name: 📧 Send Email Notification
-    needs: [deploy, rollback]
+    needs: deploy
     runs-on: ubuntu-latest
+    if: always()
+
     steps:
-      - name: Send Success or Failure Email
+      - name: Send Success Email
         if: success()
         run: |
           SUBJECT="GitHub Actions SUCCESS: ${{ github.workflow }} #${{ github.run_number }}"
           BODY="SUCCESS: Deployment succeeded for commit ${{ github.sha }} in repository ${{ github.repository }}.
           Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          echo "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
+          echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
 
           curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
             --mail-from "${{ secrets.GMAIL_USER }}" \
@@ -111,7 +113,7 @@ jobs:
           BODY="FAILURE: Deployment failed for commit ${{ github.sha }} in repository ${{ github.repository }}.
           Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          echo "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
+          echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
 
           curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
             --mail-from "${{ secrets.GMAIL_USER }}" \
