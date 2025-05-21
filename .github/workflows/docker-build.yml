@@ -1,4 +1,4 @@
-name: Build, Push, Deploy with Rollback and Email Notifications
+name: Build, Push, Deploy with Rollback and Email
 
 on:
   push:
@@ -18,49 +18,49 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Get latest tag from Docker Hub
-        id: get_latest_tag
+      - name: Set Docker Image Tag
+        id: set_tag
         run: |
-          # Fetch tags from Docker Hub API for your repo, filter tags starting with 'v', sort and get highest
-          latest_tag=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/my-nginx-app/tags?page_size=100" \
-            | jq -r '.results[].name' \
-            | grep '^v' \
-            | sort -V \
-            | tail -n1)
-          echo "Latest tag: $latest_tag"
+          # fallback tag
+          fallback_tag="v1.0"
 
-          if [[ -z "$latest_tag" ]]; then
-            new_tag="v1.0"
+          # fetch tags from Docker Hub
+          latest=$(curl -s https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/my-nginx-app/tags | jq -r '.results[].name' | grep '^v' | sort -V | tail -n1)
+
+          if [[ -z "$latest" ]]; then
+            new_tag="$fallback_tag"
           else
-            # increment patch version
-            IFS='.' read -r major minor patch <<< "${latest_tag#v}"
-            patch=$((patch + 1))
-            new_tag="v${major}.${minor}.${patch}"
+            # Increment patch version
+            IFS='.' read -r v1 v2 v3 <<< "${latest#v}"
+            v3=$((v3 + 1))
+            new_tag="v${v1}.${v2}.${v3}"
           fi
-          echo "New tag: $new_tag"
-          echo "::set-output name=image_tag::$new_tag"
+
+          echo "New image tag: $new_tag"
+          echo "image_tag=$new_tag" >> $GITHUB_OUTPUT
 
       - name: Build Docker Image
-        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.get_latest_tag.outputs.image_tag }} -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.set_tag.outputs.image_tag }} -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
 
-      - name: Save Docker Image as Tarball
-        run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.get_latest_tag.outputs.image_tag }} -o my-nginx-app.tar
+      - name: Save Docker Image
+        run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.set_tag.outputs.image_tag }} -o my-nginx-app.tar
 
-      - name: Upload Docker Image Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: docker-image
           path: my-nginx-app.tar
 
   push:
-    name: 📦 Push to Docker Hub
+    name: 📦 Push Docker Image
     needs: build
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ needs.build.outputs.image_tag }}
 
     steps:
-      - name: Download Docker Image Artifact
+      - name: Download Artifact
         uses: actions/download-artifact@v4
         with:
           name: docker-image
@@ -71,13 +71,13 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Push Docker Images (versioned and latest)
+      - name: Push Image
         run: |
           docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.image_tag }}
           docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   deploy:
-    name: 🚀 Deploy Locally
+    name: 🚀 Deploy App
     needs: push
     runs-on: self-hosted
     outputs:
@@ -87,101 +87,73 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Pull and Run New Image Tag
-        id: deploy_step
+      - name: Deploy New Image
         run: |
           TAG=${{ needs.push.outputs.image_tag }}
-          echo "Deploying image tag: $TAG"
-
           docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$TAG
-
           docker stop myapp || true
           docker rm myapp || true
-
           docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$TAG
-
-          # Save deployed tag for rollback
           echo $TAG > deployed_tag.txt
 
-      - name: Upload deployed tag artifact
+      - name: Upload deployed tag
         uses: actions/upload-artifact@v4
         with:
           name: deployed-tag
           path: deployed_tag.txt
 
   rollback:
-    name: 🔁 Rollback on Failure
+    name: 🔁 Rollback
     needs: deploy
     if: failure()
     runs-on: self-hosted
 
     steps:
-      - name: Download deployed tag artifact
+      - name: Download Deployed Tag
         uses: actions/download-artifact@v4
         with:
           name: deployed-tag
           path: .
 
-      - name: Determine previous tag for rollback
-        id: get_prev_tag
+      - name: Rollback to Previous Version
         run: |
           CURRENT_TAG=$(cat deployed_tag.txt)
-          echo "Current deployed tag: $CURRENT_TAG"
+          echo "Current: $CURRENT_TAG"
 
-          # Fetch tags from Docker Hub API, filter, sort, and find previous version
-          tags=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/my-nginx-app/tags?page_size=100" | jq -r '.results[].name' | grep '^v' | sort -V)
-          prev_tag=""
-          prev_found=false
-          for t in $tags; do
-            if $prev_found; then
-              prev_tag=$t
-              break
-            fi
-            if [[ "$t" == "$CURRENT_TAG" ]]; then
-              prev_found=true
-            fi
+          TAGS=$(curl -s https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/my-nginx-app/tags | jq -r '.results[].name' | grep '^v' | sort -V)
+          prev=""
+          for t in $TAGS; do
+            if [[ "$t" == "$CURRENT_TAG" ]]; then break; fi
+            prev="$t"
           done
 
-          if [[ -z "$prev_tag" ]]; then
-            echo "No previous tag found, fallback to latest"
-            prev_tag="latest"
+          if [[ -z "$prev" ]]; then
+            echo "No previous version found. Rolling back to latest."
+            prev="latest"
           fi
 
-          echo "Previous tag to rollback: $prev_tag"
-          echo "::set-output name=rollback_tag::$prev_tag"
-
-      - name: Rollback to previous version
-        run: |
-          ROLLBACK_TAG=${{ steps.get_prev_tag.outputs.rollback_tag }}
-          echo "Rolling back to image tag: $ROLLBACK_TAG"
-
+          echo "Rolling back to: $prev"
+          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$prev
           docker stop myapp || true
           docker rm myapp || true
-          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$ROLLBACK_TAG
-          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$ROLLBACK_TAG
+          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$prev
 
   notify:
-    name: 📧 Send Email Notification
+    name: 📧 Notify
     needs: [deploy, rollback]
     runs-on: ubuntu-latest
     if: always()
 
     steps:
-      - name: Prepare notification details
+      - name: Send Notification
         run: |
           STATUS="SUCCESS"
-          if [[ "${{ job.status }}" != "success" ]]; then
-            STATUS="FAILURE"
-          fi
+          if [[ "${{ needs.deploy.result }}" == "failure" ]]; then STATUS="FAILURE"; fi
           TAG="${{ needs.deploy.outputs.deployed_tag || 'unknown' }}"
-          echo "STATUS=$STATUS" >> $GITHUB_ENV
-          echo "TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Send Email
-        run: |
-          SUBJECT="GitHub Actions $STATUS: ${{ github.workflow }} #${{ github.run_number }}"
-          BODY="$STATUS: Deployment of image tag $TAG for commit ${{ github.sha }} in repository ${{ github.repository }}.
-          Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SUBJECT="GitHub Actions $STATUS: Deployment"
+          BODY="$STATUS deploying image tag $TAG for commit ${{ github.sha }} in repo ${{ github.repository }}.
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
 
