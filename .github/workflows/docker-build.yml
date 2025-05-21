@@ -1,4 +1,4 @@
-name: Build, Push, Deploy with Versioned Rollback and Email Notifications
+name: Build, Push, Deploy with Versioning, Rollback, and Email Notifications
 
 on:
   push:
@@ -12,153 +12,144 @@ jobs:
     name: ⬆️ Bump Version
     runs-on: ubuntu-latest
     outputs:
-      new_tag: ${{ steps.bump.outputs.new_tag }}
-      old_tag: ${{ steps.bump.outputs.old_tag }}
+      new_tag: ${{ steps.set_version.outputs.new_tag }}
+      old_tag: ${{ steps.set_version.outputs.old_tag }}
 
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Bump Version
-        id: bump
+      - name: Bump version
+        id: set_version
         run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+
           if [ ! -f version.txt ]; then echo "v1.0" > version.txt; fi
           OLD_TAG=$(cat version.txt)
-          VERSION_NUM=$(echo $OLD_TAG | sed 's/v//')
-          MAJOR=$(echo $VERSION_NUM | cut -d. -f1)
-          MINOR=$(echo $VERSION_NUM | cut -d. -f2)
+          VERSION_NUMBER=$(echo $OLD_TAG | cut -d 'v' -f2)
+          MAJOR=$(echo $VERSION_NUMBER | cut -d '.' -f1)
+          MINOR=$(echo $VERSION_NUMBER | cut -d '.' -f2)
           NEW_MINOR=$((MINOR + 1))
-          NEW_TAG="v$MAJOR.$NEW_MINOR"
+          NEW_TAG="v${MAJOR}.${NEW_MINOR}"
+
+          echo "Old Tag: $OLD_TAG"
+          echo "New Tag: $NEW_TAG"
+
           echo $NEW_TAG > version.txt
+
+          git add version.txt
+          git commit -m "Bump version to $NEW_TAG"
+          git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }} HEAD:main
+
           echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
           echo "old_tag=$OLD_TAG" >> $GITHUB_OUTPUT
-
-      - name: Upload version.txt
-        uses: actions/upload-artifact@v4
-        with:
-          name: version-file
-          path: version.txt
 
   build:
     name: 🛠️ Build Docker Image
     needs: bump-version
     runs-on: ubuntu-latest
+    outputs:
+      new_tag: ${{ needs.bump-version.outputs.new_tag }}
 
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v3
-
-      - name: Download Version File
-        uses: actions/download-artifact@v4
-        with:
-          name: version-file
-
-      - name: Read Version
-        id: read_version
-        run: echo "VERSION=$(cat version.txt)" >> $GITHUB_OUTPUT
 
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Build Docker Image
+      - name: Build and tag image with version and latest
         run: |
-          docker build -t $IMAGE_NAME:${{ steps.read_version.outputs.VERSION }} .
-          docker tag $IMAGE_NAME:${{ steps.read_version.outputs.VERSION }} $IMAGE_NAME:latest
+          docker build -t $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }} .
+          docker tag $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }} $IMAGE_NAME:latest
 
-      - name: Save Docker Image as Tarball
-        run: docker save $IMAGE_NAME:${{ steps.read_version.outputs.VERSION }} -o my-nginx-app.tar
+      - name: Save Docker image as tarball
+        run: docker save $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }} -o my-nginx-app.tar
 
-      - name: Upload Docker Image Artifact
+      - name: Upload Docker image artifact
         uses: actions/upload-artifact@v4
         with:
           name: docker-image
           path: my-nginx-app.tar
 
   push:
-    name: 📦 Push to Docker Hub
+    name: 📦 Push Docker Image
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      new_tag: ${{ needs.build.outputs.new_tag }}
 
     steps:
-      - name: Download Docker Image Artifact
+      - name: Download Docker image artifact
         uses: actions/download-artifact@v4
         with:
           name: docker-image
 
-      - name: Download Version File
-        uses: actions/download-artifact@v4
-        with:
-          name: version-file
-
-      - name: Read Version
-        id: read_version
-        run: echo "VERSION=$(cat version.txt)" >> $GITHUB_OUTPUT
-
-      - name: Load Docker Image
+      - name: Load Docker image
         run: docker load -i my-nginx-app.tar
+
+      - name: Tag loaded image as latest
+        run: |
+          docker tag $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }} $IMAGE_NAME:latest || echo "Tag exists"
 
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Push Docker Images
-        run: |
-          docker push $IMAGE_NAME:${{ steps.read_version.outputs.VERSION }}
-          docker push $IMAGE_NAME:latest
+      - name: Push version tag
+        run: docker push $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }}
 
-      - name: Tag previous version as rollback
-        if: ${{ steps.bump.outputs.old_tag != '' }}
-        run: |
-          # Pull the previous version image to ensure it exists
-          docker pull $IMAGE_NAME:${{ needs.bump-version.outputs.old_tag }} || exit 0
-
-          # Tag previous version as rollback
-          docker tag $IMAGE_NAME:${{ needs.bump-version.outputs.old_tag }} $IMAGE_NAME:rollback
-
-          # Push rollback tag
-          docker push $IMAGE_NAME:rollback
+      - name: Push latest tag
+        run: docker push $IMAGE_NAME:latest
 
   deploy:
-    name: 🚀 Deploy to Self-Hosted
-    needs: [push, bump-version]
+    name: 🚀 Deploy on self-hosted runner
+    needs: push
     runs-on: self-hosted
     continue-on-error: true
 
     steps:
-      - name: Pull and Deploy Latest Image
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Pull latest image and run container
         run: |
+          docker pull $IMAGE_NAME:latest
           docker stop myapp || true
           docker rm myapp || true
-          docker pull $IMAGE_NAME:latest
           docker run -d --name myapp -p 81:80 $IMAGE_NAME:latest
 
   rollback:
-    name: 🔁 Rollback on Failure
-    needs: [deploy]
+    name: 🔁 Rollback on failure
+    needs: [deploy, bump-version]
     if: failure()
     runs-on: self-hosted
 
     steps:
-      - name: Rollback to Rollback Tag
+      - name: Rollback to previous version
         run: |
-          echo "Deployment failed. Rolling back to rollback tag..."
+          echo "Deployment failed. Rolling back to previous version..."
           docker stop myapp || true
           docker rm myapp || true
-          docker pull $IMAGE_NAME:rollback
-          docker run -d --name myapp -p 81:80 $IMAGE_NAME:rollback
+          docker pull $IMAGE_NAME:${{ needs.bump-version.outputs.old_tag }}
+          docker run -d --name myapp -p 81:80 $IMAGE_NAME:${{ needs.bump-version.outputs.old_tag }}
 
   notify:
-    name: 📧 Email Notification
+    name: 📧 Email Notifications
     needs: deploy
     runs-on: ubuntu-latest
     if: always()
 
     steps:
-      - name: Send Success Email
+      - name: Send success email
         if: success()
         run: |
-          SUBJECT="✅ SUCCESS: Deployment of $IMAGE_NAME"
-          BODY="Deployment succeeded for $IMAGE_NAME:latest.\nCommit: ${{ github.sha }}\nURL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SUBJECT="SUCCESS: Deployment $IMAGE_NAME"
+          BODY="Deployment succeeded for commit ${{ github.sha }}.
+          Check run here: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
           echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
+
           curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
             --mail-from "${{ secrets.GMAIL_USER }}" \
             --mail-rcpt "${{ secrets.TO_EMAIL }}" \
@@ -166,12 +157,15 @@ jobs:
             --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
             --insecure
 
-      - name: Send Failure Email
+      - name: Send failure email
         if: failure()
         run: |
-          SUBJECT="❌ FAILURE: Deployment of $IMAGE_NAME"
-          BODY="Deployment failed for $IMAGE_NAME:latest.\nCommit: ${{ github.sha }}\nURL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SUBJECT="FAILURE: Deployment $IMAGE_NAME"
+          BODY="Deployment failed for commit ${{ github.sha }}.
+          Check run here: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
           echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
+
           curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
             --mail-from "${{ secrets.GMAIL_USER }}" \
             --mail-rcpt "${{ secrets.TO_EMAIL }}" \
