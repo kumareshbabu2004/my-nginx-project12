@@ -39,9 +39,10 @@ jobs:
           echo "New image tag: $new_tag"
           echo "image_tag=$new_tag" >> $GITHUB_OUTPUT
 
-      - name: Build Docker Image
-        run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.set_tag.outputs.image_tag }} -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
+      - name: Build Docker Image with version + latest tags
+        run: | 
+        docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.set_tag.outputs.image_tag }} \
+                     -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
 
       - name: Save Docker Image
         run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.set_tag.outputs.image_tag }} -o my-nginx-app.tar
