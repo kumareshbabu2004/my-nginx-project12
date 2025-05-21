@@ -21,33 +21,29 @@ jobs:
       - name: Set Docker Image Tag
         id: set_tag
         run: |
-          # fallback tag
-          fallback_tag="v1.0"
-
-          # fetch tags from Docker Hub
+          fallback_tag="v1.0.0"
           latest=$(curl -s https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/my-nginx-app/tags | jq -r '.results[].name' | grep '^v' | sort -V | tail -n1)
 
           if [[ -z "$latest" ]]; then
             new_tag="$fallback_tag"
           else
-            # Increment patch version
-            IFS='.' read -r v1 v2 v3 <<< "${latest#v}"
-            v3=$((v3 + 1))
-            new_tag="v${v1}.${v2}.${v3}"
+            IFS='.' read -r major minor patch <<< "${latest#v}"
+            patch=$((patch + 1))
+            new_tag="v$major.$minor.$patch"
           fi
 
           echo "New image tag: $new_tag"
           echo "image_tag=$new_tag" >> $GITHUB_OUTPUT
 
       - name: Build Docker Image with version + latest tags
-        run: | 
-        docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.set_tag.outputs.image_tag }} \
-                     -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.set_tag.outputs.image_tag }} \
+                       -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
 
       - name: Save Docker Image
         run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.set_tag.outputs.image_tag }} -o my-nginx-app.tar
 
-      - name: Upload Artifact
+      - name: Upload Docker Image Artifact
         uses: actions/upload-artifact@v4
         with:
           name: docker-image
@@ -61,7 +57,7 @@ jobs:
       image_tag: ${{ needs.build.outputs.image_tag }}
 
     steps:
-      - name: Download Artifact
+      - name: Download Docker Image Artifact
         uses: actions/download-artifact@v4
         with:
           name: docker-image
@@ -72,13 +68,13 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Push Image
+      - name: Push Docker Images (version + latest)
         run: |
           docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.image_tag }}
           docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   deploy:
-    name: 🚀 Deploy App
+    name: 🚀 Deploy Locally
     needs: push
     runs-on: self-hosted
     outputs:
@@ -88,7 +84,7 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Deploy New Image
+      - name: Pull and Run New Image
         run: |
           TAG=${{ needs.push.outputs.image_tag }}
           docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$TAG
@@ -104,7 +100,7 @@ jobs:
           path: deployed_tag.txt
 
   rollback:
-    name: 🔁 Rollback
+    name: 🔁 Rollback on Failure
     needs: deploy
     if: failure()
     runs-on: self-hosted
@@ -119,7 +115,7 @@ jobs:
       - name: Rollback to Previous Version
         run: |
           CURRENT_TAG=$(cat deployed_tag.txt)
-          echo "Current: $CURRENT_TAG"
+          echo "Current tag was: $CURRENT_TAG"
 
           TAGS=$(curl -s https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/my-nginx-app/tags | jq -r '.results[].name' | grep '^v' | sort -V)
           prev=""
@@ -129,24 +125,23 @@ jobs:
           done
 
           if [[ -z "$prev" ]]; then
-            echo "No previous version found. Rolling back to latest."
+            echo "No previous version found. Falling back to 'latest'"
             prev="latest"
           fi
 
-          echo "Rolling back to: $prev"
           docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$prev
           docker stop myapp || true
           docker rm myapp || true
           docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$prev
 
   notify:
-    name: 📧 Notify
+    name: 📧 Email Notification
     needs: [deploy, rollback]
     runs-on: ubuntu-latest
     if: always()
 
     steps:
-      - name: Send Notification
+      - name: Send Email Notification
         run: |
           STATUS="SUCCESS"
           if [[ "${{ needs.deploy.result }}" == "failure" ]]; then STATUS="FAILURE"; fi
