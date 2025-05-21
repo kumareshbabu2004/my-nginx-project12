@@ -29,6 +29,12 @@ jobs:
 
           if [ ! -f version.txt ]; then echo "v1.0" > version.txt; fi
           CURRENT_TAG=$(cat version.txt)
+
+          # Fallback if version.txt is corrupted
+          if [[ ! "$CURRENT_TAG" =~ ^v[0-9]+\.[0-9]+$ ]]; then
+            CURRENT_TAG="v1.0"
+          fi
+
           VERSION_NUMBER=$(echo $CURRENT_TAG | cut -d 'v' -f2)
           MAJOR=$(echo $VERSION_NUMBER | cut -d '.' -f1)
           MINOR=$(echo $VERSION_NUMBER | cut -d '.' -f2)
@@ -42,7 +48,7 @@ jobs:
 
           git add version.txt
           git commit -m "Bump version to $NEW_TAG"
-          git push https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} HEAD:main
+          git push https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git HEAD:main
 
           echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
           echo "old_tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
@@ -111,9 +117,10 @@ jobs:
       - name: Send Success Email
         if: success()
         run: |
-          SUBJECT="SUCCESS: Deployment of $IMAGE_NAME"
-          BODY="Deployment succeeded for commit ${{ github.sha }}."
-          echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
+          echo "Subject: SUCCESS: Deployment of $IMAGE_NAME
+To: ${{ secrets.TO_EMAIL }}
+
+Deployment succeeded for commit ${{ github.sha }}." > mail.txt
 
           curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
             --mail-from "${{ secrets.GMAIL_USER }}" \
@@ -125,9 +132,10 @@ jobs:
       - name: Send Failure Email
         if: failure()
         run: |
-          SUBJECT="FAILURE: Deployment of $IMAGE_NAME"
-          BODY="Deployment failed for commit ${{ github.sha }}."
-          echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
+          echo "Subject: FAILURE: Deployment of $IMAGE_NAME
+To: ${{ secrets.TO_EMAIL }}
+
+Deployment failed for commit ${{ github.sha }}." > mail.txt
 
           curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
             --mail-from "${{ secrets.GMAIL_USER }}" \
