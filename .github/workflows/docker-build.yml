@@ -1,36 +1,25 @@
-name: Build, Push, Deploy with Rollback and Email Notifications
+name: Build, Push, Deploy with Versioning and Email Notification
 
 on:
   push:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      rollback:
-        description: 'Do rollback? (true/false)'
-        required: false
-        default: 'false'
-      rollback_version:
-        description: 'Rollback version (e.g. v1.5)'
-        required: false
-        default: ''
 
 env:
-  DOCKER_IMAGE: kumaresh11/nginx-pipeline
-  GMAIL_USER: rgkumar1233@gmail.com
-  TO_EMAIL: rgkumar1233@gmail.com
+  DOCKER_IMAGE: your-dockerhub-username/my-nginx-app
+  GMAIL_USER: yourgmail@gmail.com
+  TO_EMAIL: yourgmail@gmail.com
 
 jobs:
   build_and_push:
-    name: Build and Push Docker Image
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.set_version.outputs.version }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Set Docker image version
+      - name: Set Docker Image Version
         id: set_version
         run: |
           VERSION="v1.${{ github.run_number }}"
@@ -46,42 +35,22 @@ jobs:
         run: docker push $DOCKER_IMAGE:${{ steps.set_version.outputs.version }}
 
   deploy:
-    name: Deploy Docker Container
     needs: build_and_push
     runs-on: self-hosted
+
     steps:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Stop and Remove Existing Container
+      - name: Stop old container if exists
         run: |
-          docker stop nginx-container || true
-          docker rm nginx-container || true
+          docker stop my-nginx-container || true
+          docker rm my-nginx-container || true
 
-      - name: Run New Container
-        run: docker run -d --name nginx-container -p 80:80 $DOCKER_IMAGE:${{ needs.build_and_push.outputs.version }}
-
-  rollback:
-    name: Rollback Docker Container (Manual)
-    runs-on: self-hosted
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.rollback == 'true'
-    steps:
-      - name: Log in to Docker Hub
-        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-      - name: Rollback to Specified Version
-        run: |
-          if [ -z "${{ github.event.inputs.rollback_version }}" ]; then
-            echo "Rollback version not specified. Exiting."
-            exit 1
-          fi
-          echo "Rolling back to version: ${{ github.event.inputs.rollback_version }}"
-          docker stop nginx-container || true
-          docker rm nginx-container || true
-          docker run -d --name nginx-container -p 80:80 $DOCKER_IMAGE:${{ github.event.inputs.rollback_version }}
+      - name: Run new container
+        run: docker run -d --name my-nginx-container -p 80:80 $DOCKER_IMAGE:${{ needs.build_and_push.outputs.version }}
 
   notify:
-    name: Send Email Notification
     needs: [build_and_push, deploy]
     runs-on: ubuntu-latest
     if: always()
@@ -90,7 +59,7 @@ jobs:
       GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
       TO_EMAIL: ${{ env.TO_EMAIL }}
     steps:
-      - name: Prepare email content
+      - name: Prepare Email Content
         run: |
           STATUS="SUCCESS"
           if [[ "${{ job.status }}" != "success" ]]; then
@@ -103,7 +72,7 @@ Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ gith
 
           echo -e "Subject: $SUBJECT\nTo: $TO_EMAIL\n\n$BODY" > mail.txt
 
-      - name: Send email via Gmail SMTP
+      - name: Send Email via Gmail SMTP
         run: |
           curl --url "smtps://smtp.gmail.com:465" --ssl-reqd \
             --mail-from "$GMAIL_USER" \
