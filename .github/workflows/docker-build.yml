@@ -49,7 +49,7 @@ jobs:
         docker rm nginx-container || true
 
     - name: Run new container
-      run: docker run -d --name nginx-container -p 80:80 ${{ env.DOCKER_IMAGE }}:${{ env.VERSION }}
+      run: docker run -d --name nginx-container -p 81:80 ${{ env.DOCKER_IMAGE }}:${{ env.VERSION }}
 
     - name: Ask for rollback
       id: rollback
