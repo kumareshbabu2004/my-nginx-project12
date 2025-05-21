@@ -8,36 +8,31 @@ jobs:
   build:
     name: 🛠️ Build Docker Image
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.tag.outputs.tag }}
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
+      - name: Generate New Version Tag
+        id: tag
+        run: |
+          VERSION=$(date +'%Y.%m.%d.%H%M%S')
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Set Version Tag
-        id: tag
-        run: |
-          fallback="v1.0.0"
-          latest=$(curl -s https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/my-nginx-app/tags | jq -r '.results[].name' | grep '^v' | sort -V | tail -n1)
-          if [[ -z "$latest" ]]; then
-            new_tag="$fallback"
-          else
-            IFS='.' read -r major minor patch <<< "${latest#v}"
-            new_tag="v$major.$minor.$((patch + 1))"
-          fi
-          echo "tag=$new_tag" >> $GITHUB_OUTPUT
-
       - name: Build Docker Image
         run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest \
-                       -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.tag.outputs.tag }} .
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.tag.outputs.tag }} .
+          docker tag ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.tag.outputs.tag }} ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
-      - name: Save Docker Image as Tarball
-        run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.tag.outputs.tag }} -o my-nginx-app.tar
+      - name: Save Docker Image (Tagged + Latest)
+        run: |
+          docker save \
+            ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.tag.outputs.tag }} \
+            ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest \
+            -o my-nginx-app.tar
 
       - name: Upload Docker Image Artifact
         uses: actions/upload-artifact@v4
@@ -49,8 +44,6 @@ jobs:
     name: 📦 Push to Docker Hub
     needs: build
     runs-on: ubuntu-latest
-    env:
-      TAG: ${{ needs.build.outputs.tag }}
 
     steps:
       - name: Download Docker Image Artifact
@@ -64,13 +57,9 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Push Docker Image (Tagged and Latest)
+      - name: Push Versioned and Latest Tags
         run: |
-          if [ -z "$TAG" ]; then
-            echo "❌ ERROR: TAG variable is empty. Aborting push."
-            exit 1
-          fi
-          docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$TAG
+          docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.tag }}
           docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   deploy:
@@ -98,7 +87,6 @@ jobs:
     steps:
       - name: Rollback to Previous Version
         run: |
-          echo "Deployment failed. Rolling back..."
           docker stop myapp || true
           docker rm myapp || true
           docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:rollback
@@ -110,28 +98,18 @@ jobs:
     if: always()
 
     steps:
-      - name: Send Success Email
-        if: success()
+      - name: Send Email Notification
         run: |
-          SUBJECT="✅ SUCCESS: ${{ github.workflow }} #${{ github.run_number }}"
-          BODY="Deployment succeeded.\n\nCommit: ${{ github.sha }}\nRepo: ${{ github.repository }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
-          curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
-               --mail-from "${{ secrets.GMAIL_USER }}" \
-               --mail-rcpt "${{ secrets.TO_EMAIL }}" \
-               --upload-file mail.txt \
-               --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
-               --insecure
+          STATUS="${{ job.status }}"
+          SUBJECT="GitHub Actions $STATUS: ${{ github.workflow }} #${{ github.run_number }}"
+          BODY="$STATUS: Deployment for commit ${{ github.sha }} in repo ${{ github.repository }}. 
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-      - name: Send Failure Email
-        if: failure()
-        run: |
-          SUBJECT="❌ FAILURE: ${{ github.workflow }} #${{ github.run_number }}"
-          BODY="Deployment failed.\n\nCommit: ${{ github.sha }}\nRepo: ${{ github.repository }}\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
+
           curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
-               --mail-from "${{ secrets.GMAIL_USER }}" \
-               --mail-rcpt "${{ secrets.TO_EMAIL }}" \
-               --upload-file mail.txt \
-               --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
-               --insecure
+            --mail-from "${{ secrets.GMAIL_USER }}" \
+            --mail-rcpt "${{ secrets.TO_EMAIL }}" \
+            --upload-file mail.txt \
+            --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
+            --insecure
