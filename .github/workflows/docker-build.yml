@@ -105,6 +105,18 @@ jobs:
           docker push $IMAGE_NAME:${{ steps.read_version.outputs.VERSION }}
           docker push $IMAGE_NAME:latest
 
+      - name: Tag previous version as rollback
+        if: ${{ steps.bump.outputs.old_tag != '' }}
+        run: |
+          # Pull the previous version image to ensure it exists
+          docker pull $IMAGE_NAME:${{ needs.bump-version.outputs.old_tag }} || exit 0
+
+          # Tag previous version as rollback
+          docker tag $IMAGE_NAME:${{ needs.bump-version.outputs.old_tag }} $IMAGE_NAME:rollback
+
+          # Push rollback tag
+          docker push $IMAGE_NAME:rollback
+
   deploy:
     name: 🚀 Deploy to Self-Hosted
     needs: [push, bump-version]
@@ -121,18 +133,18 @@ jobs:
 
   rollback:
     name: 🔁 Rollback on Failure
-    needs: [deploy, bump-version]
+    needs: [deploy]
     if: failure()
     runs-on: self-hosted
 
     steps:
-      - name: Rollback to Previous Version
+      - name: Rollback to Rollback Tag
         run: |
-          echo "Deployment failed. Rolling back to ${{ needs.bump-version.outputs.old_tag }}..."
+          echo "Deployment failed. Rolling back to rollback tag..."
           docker stop myapp || true
           docker rm myapp || true
-          docker pull $IMAGE_NAME:${{ needs.bump-version.outputs.old_tag }}
-          docker run -d --name myapp -p 81:80 $IMAGE_NAME:${{ needs.bump-version.outputs.old_tag }}
+          docker pull $IMAGE_NAME:rollback
+          docker run -d --name myapp -p 81:80 $IMAGE_NAME:rollback
 
   notify:
     name: 📧 Email Notification
