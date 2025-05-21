@@ -25,7 +25,12 @@ jobs:
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
 
+          # Make sure the repo is up to date to avoid push conflicts
+          git pull origin main || true
+
+          # Initialize version.txt if missing
           if [ ! -f version.txt ]; then echo "v1.0" > version.txt; fi
+
           CURRENT_TAG=$(cat version.txt)
           VERSION_NUMBER=$(echo $CURRENT_TAG | cut -d 'v' -f2)
           MAJOR=$(echo $VERSION_NUMBER | cut -d '.' -f1)
@@ -37,7 +42,9 @@ jobs:
           echo "New Tag: $NEW_TAG"
 
           echo $NEW_TAG > version.txt
-          git commit -am "Bump version to $NEW_TAG"
+
+          git add version.txt
+          git commit -m "Bump version to $NEW_TAG"
           git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }} HEAD:main
 
           echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
@@ -69,19 +76,22 @@ jobs:
     name: 🚀 Deploy
     needs: build
     runs-on: self-hosted
-    continue-on-error: true
 
     steps:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
       - name: Deploy Container
-        id: deploy
         run: |
+          echo "Stopping current container if exists..."
           docker stop myapp || true
           docker rm myapp || true
-          docker pull $IMAGE_NAME:latest
-          docker run -d --name myapp -p 81:80 $IMAGE_NAME:latest
+
+          echo "Pulling new image with tag ${{ needs.bump-version.outputs.new_tag }}..."
+          docker pull $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }}
+
+          echo "Running new container..."
+          docker run -d --name myapp -p 81:80 $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }}
 
   rollback:
     name: 🔁 Rollback on Failure
