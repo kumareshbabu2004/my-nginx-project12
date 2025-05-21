@@ -1,77 +1,59 @@
-name: Build, Push, Deploy with Rollback and Email Notifications
+name: Build, Push, Deploy with Rollback and Email
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
 
 jobs:
   build:
     name: 🛠️ Build Docker Image
     runs-on: ubuntu-latest
 
+    outputs:
+      version: ${{ steps.set_tag.outputs.version }}
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Generate New Version Tag
-        id: tag
+      - name: Generate Image Tag
+        id: set_tag
         run: |
-          VERSION=$(date +'%Y.%m.%d.%H%M%S')
-          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          VERSION="v$(date +'%Y.%m.%d.%H%M%S')"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Log in to Docker Hub
+      - name: Docker Login
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Build Docker Image
+      - name: Pull Latest as Rollback
         run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.tag.outputs.tag }} .
-          docker tag ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.tag.outputs.tag }} ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest || echo "No previous latest image found"
 
-      - name: Save Docker Image (Tagged + Latest)
+      - name: Tag Latest as Rollback (if exists)
         run: |
-          docker save \
-            ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.tag.outputs.tag }} \
-            ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest \
-            -o my-nginx-app.tar
+          docker tag ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:rollback || true
 
-      - name: Upload Docker Image Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: docker-image
-          path: my-nginx-app.tar
-
-  push:
-    name: 📦 Push to Docker Hub
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Download Docker Image Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-image
-
-      - name: Load Docker Image
-        run: docker load -i my-nginx-app.tar
-
-      - name: Log in to Docker Hub
-        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-      - name: Push Versioned and Latest Tags
+      - name: Build New Image
         run: |
-          docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.tag }}
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.set_tag.outputs.version }} .
+          docker tag ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.set_tag.outputs.version }} ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+
+      - name: Push All Tags
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.set_tag.outputs.version }}
           docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+          docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:rollback || echo "No rollback image to push"
 
   deploy:
-    name: 🚀 Deploy Locally
-    needs: push
+    name: 🚀 Deploy Container
+    needs: build
     runs-on: self-hosted
 
     steps:
-      - name: Log in to Docker Hub
+      - name: Docker Login
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Pull and Run Latest Image
+      - name: Pull and Run New Image
         run: |
           docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
           docker stop myapp || true
@@ -79,33 +61,37 @@ jobs:
           docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   rollback:
-    name: 🔁 Rollback on Failure
+    name: 🔁 Rollback If Deploy Fails
     needs: deploy
     if: failure()
     runs-on: self-hosted
 
     steps:
-      - name: Rollback to Previous Version
+      - name: Run Rollback Container
         run: |
           docker stop myapp || true
           docker rm myapp || true
+          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:rollback
           docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:rollback
 
   notify:
     name: 📧 Send Email Notification
-    needs: deploy
+    needs: [deploy, rollback]
     runs-on: ubuntu-latest
     if: always()
 
     steps:
-      - name: Send Email Notification
+      - name: Send Email
         run: |
           STATUS="${{ job.status }}"
-          SUBJECT="GitHub Actions $STATUS: ${{ github.workflow }} #${{ github.run_number }}"
-          BODY="$STATUS: Deployment for commit ${{ github.sha }} in repo ${{ github.repository }}. 
-          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "Subject: Deployment $STATUS
+          To: ${{ secrets.TO_EMAIL }}
 
-          echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
+          Workflow: ${{ github.workflow }}
+          Status: $STATUS
+          Commit: ${{ github.sha }}
+          Repo: ${{ github.repository }}
+          URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > mail.txt
 
           curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
             --mail-from "${{ secrets.GMAIL_USER }}" \
