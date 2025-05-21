@@ -21,12 +21,9 @@ jobs:
 
       - name: Bump version
         id: set_version
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
-          REPO: ${{ github.repository }}
         run: |
-          git config --global user.name 'GitHub Actions'
-          git config --global user.email 'actions@github.com'
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
 
           if [ ! -f version.txt ]; then echo "v1.0" > version.txt; fi
           OLD_TAG=$(cat version.txt)
@@ -43,7 +40,7 @@ jobs:
 
           git add version.txt
           git commit -m "Bump version to $NEW_TAG"
-          git push https://x-access-token:${GH_PAT}@github.com/${REPO} HEAD:main
+          git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }} HEAD:main
 
           echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
           echo "old_tag=$OLD_TAG" >> $GITHUB_OUTPUT
@@ -62,12 +59,12 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Build and tag image with version and latest
+      - name: Build and tag image
         run: |
           docker build -t $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }} .
           docker tag $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }} $IMAGE_NAME:latest
 
-      - name: Save Docker image as tarball
+      - name: Save Docker image
         run: docker save $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }} -o my-nginx-app.tar
 
       - name: Upload Docker image artifact
@@ -92,15 +89,11 @@ jobs:
       - name: Load Docker image
         run: docker load -i my-nginx-app.tar
 
-      - name: Tag loaded image as latest
-        run: |
-          docker tag $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }} $IMAGE_NAME:latest || echo "Tag exists"
-
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
       - name: Push version tag
-        run: docker push $IMAGE_NAME:${{ needs.bump-version.outputs.new_tag }}
+        run: docker push $IMAGE_NAME:${{ needs.build.outputs.new_tag }}
 
       - name: Push latest tag
         run: docker push $IMAGE_NAME:latest
@@ -115,7 +108,7 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Pull latest image and run container
+      - name: Pull and run latest container
         run: |
           docker pull $IMAGE_NAME:latest
           docker stop myapp || true
@@ -147,9 +140,9 @@ jobs:
       - name: Send success email
         if: success()
         run: |
-          SUBJECT="SUCCESS: Deployment $IMAGE_NAME"
+          SUBJECT="✅ SUCCESS: Deployment $IMAGE_NAME"
           BODY="Deployment succeeded for commit ${{ github.sha }}.
-          Check run here: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          Check it here: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
 
@@ -163,9 +156,9 @@ jobs:
       - name: Send failure email
         if: failure()
         run: |
-          SUBJECT="FAILURE: Deployment $IMAGE_NAME"
+          SUBJECT="❌ FAILURE: Deployment $IMAGE_NAME"
           BODY="Deployment failed for commit ${{ github.sha }}.
-          Check run here: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          Check logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
 
