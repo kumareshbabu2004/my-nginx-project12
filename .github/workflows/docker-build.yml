@@ -1,4 +1,4 @@
-name: Build, Push, Deploy with Rollback
+name: Build, Push, Deploy Locally with Rollback
 
 on:
   push:
@@ -10,23 +10,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
-    - name: Log in to Docker Hub
-      run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-    - name: Build Docker Image
-      run: docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
+      - name: Build Docker Image
+        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
 
-    - name: Save Docker Image as Tarball
-      run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest -o my-nginx-app.tar
+      - name: Save Docker Image as Tarball
+        run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest -o my-nginx-app.tar
 
-    - name: Upload Docker Image Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: docker-image
-        path: my-nginx-app.tar
+      - name: Upload Docker Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: my-nginx-app.tar
 
   push:
     name: 📦 Push to Docker Hub
@@ -34,33 +34,31 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Download Docker Image Artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: docker-image
+      - name: Download Docker Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
 
-    - name: Load Docker Image
-      run: docker load -i my-nginx-app.tar
+      - name: Load Docker Image
+        run: docker load -i my-nginx-app.tar
 
-    - name: Log in to Docker Hub
-      run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-    - name: Push Docker Image
-      run: docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+      - name: Push Docker Image
+        run: docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   deploy:
-    name: 🚀 Deploy to Server
+    name: 🚀 Deploy Locally
     needs: push
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     steps:
-    - name: Deploy via SSH
-      uses: appleboy/ssh-action@v1.0.0
-      with:
-        host: ${{ secrets.SSH_HOST }}
-        username: ${{ secrets.SSH_USER }}
-        key: ${{ secrets.SSH_KEY }}
-        script: |
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Pull and Run Latest Image
+        run: |
           echo "Pulling latest image..."
           docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
@@ -75,16 +73,11 @@ jobs:
     name: 🔁 Rollback on Failure
     needs: deploy
     if: failure()
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     steps:
-    - name: Rollback to Previous Version
-      uses: appleboy/ssh-action@v1.0.0
-      with:
-        host: ${{ secrets.SSH_HOST }}
-        username: ${{ secrets.SSH_USER }}
-        key: ${{ secrets.SSH_KEY }}
-        script: |
+      - name: Rollback to Previous Version
+        run: |
           echo "Deployment failed. Rolling back..."
           docker stop myapp || true
           docker rm myapp || true
