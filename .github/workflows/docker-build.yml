@@ -8,6 +8,8 @@ jobs:
   build:
     name: 🛠️ Build Docker Image
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.set_tag.outputs.image_tag }}
 
     steps:
       - name: Checkout Code
@@ -16,11 +18,33 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
+      - name: Get latest tag from Docker Hub
+        id: get_latest_tag
+        run: |
+          # Fetch tags from Docker Hub API for your repo, filter tags starting with 'v', sort and get highest
+          latest_tag=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/my-nginx-app/tags?page_size=100" \
+            | jq -r '.results[].name' \
+            | grep '^v' \
+            | sort -V \
+            | tail -n1)
+          echo "Latest tag: $latest_tag"
+
+          if [[ -z "$latest_tag" ]]; then
+            new_tag="v1.0"
+          else
+            # increment patch version
+            IFS='.' read -r major minor patch <<< "${latest_tag#v}"
+            patch=$((patch + 1))
+            new_tag="v${major}.${minor}.${patch}"
+          fi
+          echo "New tag: $new_tag"
+          echo "::set-output name=image_tag::$new_tag"
+
       - name: Build Docker Image
-        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
+        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.get_latest_tag.outputs.image_tag }} -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest .
 
       - name: Save Docker Image as Tarball
-        run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest -o my-nginx-app.tar
+        run: docker save ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.get_latest_tag.outputs.image_tag }} -o my-nginx-app.tar
 
       - name: Upload Docker Image Artifact
         uses: actions/upload-artifact@v4
@@ -32,6 +56,8 @@ jobs:
     name: 📦 Push to Docker Hub
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ needs.build.outputs.image_tag }}
 
     steps:
       - name: Download Docker Image Artifact
@@ -45,29 +71,43 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Push Docker Image
-        run: docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+      - name: Push Docker Images (versioned and latest)
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.image_tag }}
+          docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   deploy:
     name: 🚀 Deploy Locally
     needs: push
     runs-on: self-hosted
+    outputs:
+      deployed_tag: ${{ needs.push.outputs.image_tag }}
 
     steps:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Pull and Run Latest Image
+      - name: Pull and Run New Image Tag
+        id: deploy_step
         run: |
-          echo "Pulling latest image..."
-          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+          TAG=${{ needs.push.outputs.image_tag }}
+          echo "Deploying image tag: $TAG"
 
-          echo "Stopping and removing current container if exists..."
+          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$TAG
+
           docker stop myapp || true
           docker rm myapp || true
 
-          echo "Running new container on port 81..."
-          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$TAG
+
+          # Save deployed tag for rollback
+          echo $TAG > deployed_tag.txt
+
+      - name: Upload deployed tag artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployed-tag
+          path: deployed_tag.txt
 
   rollback:
     name: 🔁 Rollback on Failure
@@ -76,25 +116,71 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Rollback to Previous Version
+      - name: Download deployed tag artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deployed-tag
+          path: .
+
+      - name: Determine previous tag for rollback
+        id: get_prev_tag
         run: |
-          echo "Deployment failed. Rolling back..."
+          CURRENT_TAG=$(cat deployed_tag.txt)
+          echo "Current deployed tag: $CURRENT_TAG"
+
+          # Fetch tags from Docker Hub API, filter, sort, and find previous version
+          tags=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/my-nginx-app/tags?page_size=100" | jq -r '.results[].name' | grep '^v' | sort -V)
+          prev_tag=""
+          prev_found=false
+          for t in $tags; do
+            if $prev_found; then
+              prev_tag=$t
+              break
+            fi
+            if [[ "$t" == "$CURRENT_TAG" ]]; then
+              prev_found=true
+            fi
+          done
+
+          if [[ -z "$prev_tag" ]]; then
+            echo "No previous tag found, fallback to latest"
+            prev_tag="latest"
+          fi
+
+          echo "Previous tag to rollback: $prev_tag"
+          echo "::set-output name=rollback_tag::$prev_tag"
+
+      - name: Rollback to previous version
+        run: |
+          ROLLBACK_TAG=${{ steps.get_prev_tag.outputs.rollback_tag }}
+          echo "Rolling back to image tag: $ROLLBACK_TAG"
+
           docker stop myapp || true
           docker rm myapp || true
-          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:rollback
+          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$ROLLBACK_TAG
+          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$ROLLBACK_TAG
 
   notify:
     name: 📧 Send Email Notification
-    needs: deploy
+    needs: [deploy, rollback]
     runs-on: ubuntu-latest
     if: always()
 
     steps:
-      - name: Send Success Email
-        if: success()
+      - name: Prepare notification details
         run: |
-          SUBJECT="GitHub Actions SUCCESS: ${{ github.workflow }} #${{ github.run_number }}"
-          BODY="SUCCESS: Deployment succeeded for commit ${{ github.sha }} in repository ${{ github.repository }}.
+          STATUS="SUCCESS"
+          if [[ "${{ job.status }}" != "success" ]]; then
+            STATUS="FAILURE"
+          fi
+          TAG="${{ needs.deploy.outputs.deployed_tag || 'unknown' }}"
+          echo "STATUS=$STATUS" >> $GITHUB_ENV
+          echo "TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Send Email
+        run: |
+          SUBJECT="GitHub Actions $STATUS: ${{ github.workflow }} #${{ github.run_number }}"
+          BODY="$STATUS: Deployment of image tag $TAG for commit ${{ github.sha }} in repository ${{ github.repository }}.
           Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
@@ -105,20 +191,3 @@ jobs:
             --upload-file mail.txt \
             --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
             --insecure
-
-      - name: Send Failure Email
-        if: failure()
-        run: |
-          SUBJECT="GitHub Actions FAILURE: ${{ github.workflow }} #${{ github.run_number }}"
-          BODY="FAILURE: Deployment failed for commit ${{ github.sha }} in repository ${{ github.repository }}.
-          Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
-          echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
-
-          curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
-            --mail-from "${{ secrets.GMAIL_USER }}" \
-            --mail-rcpt "${{ secrets.TO_EMAIL }}" \
-            --upload-file mail.txt \
-            --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
-            --insecure
-
