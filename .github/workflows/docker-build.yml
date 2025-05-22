@@ -24,7 +24,7 @@ on:
 
 jobs:
   build:
-    name: 🛠️ Build Docker Image and Generate Version Tag s
+    name: 🛠️ Build Docker Image and Generate Version Tag 
     runs-on: self-hosted
     outputs:
       version: ${{ steps.get_version.outputs.version }}
