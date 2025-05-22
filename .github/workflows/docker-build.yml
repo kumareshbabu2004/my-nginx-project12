@@ -3,7 +3,8 @@ name: Build, Push, Deploy with Rollback and Email Notifications
 on:
   push:
     branches: [main, master]
-    
+    path:
+      - 'Dockerfile'
   workflow_dispatch:
     inputs:
       ROLLBACK_CHOICE:
