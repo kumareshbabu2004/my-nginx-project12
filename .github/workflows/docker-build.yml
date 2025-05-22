@@ -9,7 +9,7 @@ on:
       - 'version.txt'
       - '.github/workflows/docker-build.yml'
   pull_request:
-    branches: [ main, newbranch] ]
+    branches: [ main, newbranch] 
     paths:
       - 'Dockerfile'
       - 'index.html'
