@@ -3,8 +3,10 @@ name: Build, Push, Deploy with Rollback and Email Notifications
 on:
   push:
     branches: [main, master]
-    path:
+    paths:
       - 'Dockerfile'
+      - 'index.html'
+      - 'version.txt'
   workflow_dispatch:
     inputs:
       ROLLBACK_CHOICE:
@@ -206,5 +208,3 @@ jobs:
             --upload-file mail.txt \
             --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
             --insecure
-
-            
