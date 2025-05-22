@@ -8,7 +8,6 @@ on:
       - 'index.html'
       - 'version.txt'
       - '.github/workflows/docker-build.yml'
-on:
   pull_request:
     branches: [ main,newbranch ]
     paths:
