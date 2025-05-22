@@ -7,18 +7,18 @@ on:
       - 'Dockerfile'
       - 'index.html'
       - 'version.txt'
-  workflow_dispatch:
-    inputs:
-      ROLLBACK_CHOICE:
-        description: 'Do you want to rollback?'
-        required: true
-        type: choice
-        options:
-          - "no"
-          - "yes"
-      ROLLBACK_VERSION:
-        description: 'If yes, enter version to rollback (e.g., v1.1.0)'
-        required: false
+  # workflow_dispatch:
+  #   inputs:
+  #     ROLLBACK_CHOICE:
+  #       description: 'Do you want to rollback?'
+  #       required: true
+  #       type: choice
+  #       options:
+  #         - "no"
+  #         - "yes"
+  #     ROLLBACK_VERSION:
+  #       description: 'If yes, enter version to rollback (e.g., v1.1.0)'
+  #       required: false
 
 jobs:
   build:
