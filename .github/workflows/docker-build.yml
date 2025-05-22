@@ -30,7 +30,7 @@ on:
 
 jobs:
   build:
-    name: 🛠️ Build Docker Image and Generate Version Tag 
+    name: 🛠️ Build Docker Image and Generate Version Tag mmm
     runs-on: self-hosted
     outputs:
       version: ${{ steps.get_version.outputs.version }}
