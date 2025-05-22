@@ -4,7 +4,6 @@ on:
   push:
     branches: [main, master]
     paths:
-      - 'Dockerfile'
       - 'index.html'
       - 'version.txt'
   workflow_dispatch:
@@ -209,4 +208,4 @@ jobs:
             --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
             --insecure
 
-            .
+            
