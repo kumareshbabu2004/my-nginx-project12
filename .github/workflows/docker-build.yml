@@ -30,7 +30,7 @@ on:
 
 jobs:
   build:
-    name: 🛠️ Build Docker Image and Generate Version Tag A
+    name: 🛠️ Build Docker Image and Generate Version Tag N
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get_version.outputs.version }}
