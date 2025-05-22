@@ -1,13 +1,13 @@
 name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
-  push:
-    branches: [ main,newbranch ]
-    paths:
-      - 'Dockerfile'
-      - 'index.html'
-      - 'version.txt'
-      - '.github/workflows/docker-build.yml'
+  # push:
+  #   branches: [ main,newbranch ]
+  #   paths:
+  #     - 'Dockerfile'
+  #     - 'index.html'
+  #     - 'version.txt'
+  #     - '.github/workflows/docker-build.yml'
   pull_request:
     branches: [ main,newbranch ]
     paths:
@@ -30,7 +30,7 @@ on:
 
 jobs:
   build:
-    name: 🛠️ Build Docker Image and Generate Version Tag v
+    name: 🛠️ Build Docker Image and Generate Version Tag 
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get_version.outputs.version }}
@@ -195,7 +195,7 @@ jobs:
           docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$ROLLBACK_VERSION
 
   notify:
-    name: 📧 Send Email Notification m
+    name: 📧 Send Email Notification
     needs: [deploy, rollback]
     runs-on: ubuntu-latest
     if: always()
