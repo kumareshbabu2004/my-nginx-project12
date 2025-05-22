@@ -1,20 +1,14 @@
 name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
-  push:
-    branches: [ main, newbranch]
-    paths:
-      - 'Dockerfile'
-      - 'index.html'
-      - 'version.txt'
-      - '.github/workflows/docker-build.yml'
   pull_request:
-    branches: [ main, newbranch] 
+    branches: [ main, newbranch ]
     paths:
       - 'Dockerfile'
       - 'index.html'
       - 'version.txt'
       - '.github/workflows/docker-build.yml'
+
     workflow_dispatch:
      inputs:
       ROLLBACK_CHOICE:
@@ -30,7 +24,7 @@ on:
 
 jobs:
   build:
-    name: 🛠️ Build Docker Image and Generate Version Tag  
+    name: 🛠️ Build Docker Image and Generate Version Tag s
     runs-on: self-hosted
     outputs:
       version: ${{ steps.get_version.outputs.version }}
@@ -133,9 +127,9 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Log in to Docker Hub 
+      - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-     
+
       - name: Pull and Run Latest Image
         run: |
           docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
@@ -179,7 +173,7 @@ jobs:
           docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$ROLLBACK_VERSION
 
   notify:
-    name: 📧 Send Email Notification 
+    name: 📧 Send Email Notification
     needs: [deploy, rollback]
     runs-on: ubuntu-latest
     if: always()
