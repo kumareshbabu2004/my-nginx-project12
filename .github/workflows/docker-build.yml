@@ -2,37 +2,36 @@ name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main,newbranch ]
     paths:
       - 'Dockerfile'
       - 'index.html'
       - 'version.txt'
       - '.github/workflows/docker-build.yml'
-on:
   pull_request:
-    branches: [ main, newbranch ]
+    branches: [ main,newbranch ]
     paths:
       - 'Dockerfile'
       - 'index.html'
       - 'version.txt'
-      - '.github/workflows/docker-build.yml'
-    workflow_dispatch:
-     inputs:
+      - '.github/workflows/docker-build.yml'    
+  workflow_dispatch:
+    inputs:
       ROLLBACK_CHOICE:
-         description: 'Do you want to rollback?'
-         required: true
-         type: choice
-         options:
-           - "no"
-           - "yes"
-     ROLLBACK_VERSION:
-         description: 'If yes, enter version to rollback (e.g., v1.1.0)'
-         required: false
+        description: 'Do you want to rollback?'
+        required: true
+        type: choice
+        options:
+          - "no"
+          - "yes"
+      ROLLBACK_VERSION:
+        description: 'If yes, enter version to rollback (e.g., v1.1.0)'
+        required: false
 
 jobs:
   build:
-    name: 🛠️ Build Docker Image and Generate Version Tag tag
-    runs-on: self-hosted
+    name: 🛠️ Build Docker Image and Generate Version Tag v
+    runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get_version.outputs.version }}
       previous_version: ${{ steps.save_prev.outputs.previous_version }}
@@ -78,6 +77,9 @@ jobs:
       - name: Tag image as latest
         run: docker tag ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.get_version.outputs.version }} ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
+      - name: Verify latest tag exists
+        run: docker images | grep ${{ secrets.DOCKER_USERNAME }}/my-nginx-app | grep latest
+
       - name: Save Docker Images as Tarball (versioned and latest)
         run: |
           docker save \
@@ -122,6 +124,11 @@ jobs:
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
+      - name: Verify images before push
+        run: |
+          docker images ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.version }}
+          docker images ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+
       - name: Push Docker Images (versioned & latest)
         run: |
           docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.version }}
@@ -130,7 +137,7 @@ jobs:
   deploy:
     name: 🚀 Deploy Locally
     needs: push
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name != 'workflow_dispatch' # Don't run deploy on manual rollback
     runs-on: self-hosted
 
     steps:
@@ -139,9 +146,14 @@ jobs:
 
       - name: Pull and Run Latest Image
         run: |
+          echo "Pulling latest image..."
           docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+
+          echo "Stopping and removing current container if exists..."
           docker stop myapp || true
           docker rm myapp || true
+
+          echo "Running new container on port 81..."
           docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
 
   rollback:
@@ -174,9 +186,12 @@ jobs:
 
       - name: Rollback to Previous Version
         run: |
+          echo "Rolling back to $ROLLBACK_VERSION..."
           docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$ROLLBACK_VERSION || true
+
           docker stop myapp || true
           docker rm myapp || true
+
           docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$ROLLBACK_VERSION
 
   notify:
@@ -202,7 +217,7 @@ jobs:
             --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
             --insecure
 
-      - name: Send Failure Email
+      - name: Send Failure Email b
         if: failure()
         run: |
           SUBJECT="GitHub Actions FAILURE: ${{ github.workflow }} #${{ github.run_number }}"
