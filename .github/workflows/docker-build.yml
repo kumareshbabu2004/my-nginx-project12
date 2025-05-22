@@ -3,7 +3,7 @@ name: Build, Push, Deploy with Rollback and Email Notifications
 on:
   push:
     branches: 
-      - 'main'
+      - main
     paths:
       - 'Dockerfile'
       - 'index.html'
