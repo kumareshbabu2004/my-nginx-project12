@@ -102,7 +102,7 @@ jobs:
   push:
     name: 📦 Push to Docker Hub
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       version: ${{ needs.build.outputs.version }}
       previous_version: ${{ needs.build.outputs.previous_version }}
@@ -197,7 +197,7 @@ jobs:
   notify:
     name: 📧 Send Email Notification
     needs: [deploy, rollback]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: always()
 
     steps:
