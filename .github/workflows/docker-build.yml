@@ -1,13 +1,13 @@
 name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
-  push:
-    branches: [ main,newbranch ]
-    paths:
-      - 'Dockerfile'
-      - 'index.html'
-      - 'version.txt'
-      - '.github/workflows/docker-build.yml'
+  # push:
+  #   branches: [ main,newbranch ]
+  #   paths:
+  #     - 'Dockerfile'
+  #     - 'index.html'
+  #     - 'version.txt'
+  #     - '.github/workflows/docker-build.yml'
   pull_request:
     branches: [ main,newbranch ]
     paths:
@@ -137,7 +137,7 @@ jobs:
   deploy:
     name: 🚀 Deploy Locally
     needs: push
-    if: github.event_name != 'workflow_dispatch' # Don't run deploy on manual rollback
+    if: github.event_name != 'workflow_dispatch'
     runs-on: self-hosted
 
     steps:
