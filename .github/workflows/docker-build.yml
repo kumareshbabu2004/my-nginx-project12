@@ -2,7 +2,7 @@ name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
   push:
-    branches: [main, newbranch]
+    branches: [ main, newbranch ]
     paths:
       - 'Dockerfile'
       - 'index.html'
@@ -10,7 +10,7 @@ on:
       - '.github/workflows/docker-build.yml'
 on:
   pull_request:
-    branches: [ newbranch ]
+    branches: [ main,newbranch ]
     paths:
       - 'Dockerfile'
       - 'index.html'
