@@ -30,8 +30,8 @@ on:
 
 jobs:
   build:
-    name: 🛠️ Build Docker Image and Generate Version Tag s
-    runs-on: ubuntu-latest
+    name: 🛠️ Build Docker Image and Generate Version Tag 
+    runs-on: self-hosted
     outputs:
       version: ${{ steps.get_version.outputs.version }}
       previous_version: ${{ steps.save_prev.outputs.previous_version }}
@@ -102,7 +102,7 @@ jobs:
   push:
     name: 📦 Push to Docker Hub
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       version: ${{ needs.build.outputs.version }}
       previous_version: ${{ needs.build.outputs.previous_version }}
@@ -197,7 +197,7 @@ jobs:
   notify:
     name: 📧 Send Email Notification
     needs: [deploy, rollback]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: always()
 
     steps:
