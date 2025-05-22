@@ -1,6 +1,14 @@
 name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Dockerfile'
+      - 'index.html'
+      - 'version.txt'
+      - '.github/workflows/docker-build.yml'
+on:
   pull_request:
     branches: [ main, newbranch ]
     paths:
@@ -8,7 +16,6 @@ on:
       - 'index.html'
       - 'version.txt'
       - '.github/workflows/docker-build.yml'
-
     workflow_dispatch:
      inputs:
       ROLLBACK_CHOICE:
@@ -24,7 +31,7 @@ on:
 
 jobs:
   build:
-    name: 🛠️ Build Docker Image and Generate Version Tag 
+    name: 🛠️ Build Docker Image and Generate Version Tag tag
     runs-on: self-hosted
     outputs:
       version: ${{ steps.get_version.outputs.version }}
