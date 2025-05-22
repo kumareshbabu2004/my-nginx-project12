@@ -1,8 +1,8 @@
 name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
-  push:
-    branches: [ main, newbranch]
+  pull_request:
+    branches: [ main, newbranch ]
     paths:
       - 'Dockerfile'
       - 'index.html'
@@ -24,7 +24,7 @@ on:
 
 jobs:
   build:
-    name: 🛠️ Build Docker Image and Generate Version Tag  
+    name: 🛠️ Build Docker Image and Generate Version Tag tag
     runs-on: self-hosted
     outputs:
       version: ${{ steps.get_version.outputs.version }}
@@ -127,9 +127,9 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Log in to Docker Hub 
+      - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-     
+
       - name: Pull and Run Latest Image
         run: |
           docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
@@ -173,7 +173,7 @@ jobs:
           docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$ROLLBACK_VERSION
 
   notify:
-    name: 📧 Send Email Notification 
+    name: 📧 Send Email Notification
     needs: [deploy, rollback]
     runs-on: ubuntu-latest
     if: always()
@@ -195,7 +195,7 @@ jobs:
             --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
             --insecure
 
-      - name: Send Failure Email mm
+      - name: Send Failure Email
         if: failure()
         run: |
           SUBJECT="GitHub Actions FAILURE: ${{ github.workflow }} #${{ github.run_number }}"
