@@ -2,7 +2,20 @@ name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, newbranch]
+    paths:
+      - 'Dockerfile'
+      - 'index.html'
+      - 'version.txt'
+      - '.github/workflows/docker-build.yml'
+on:
+  pull_request:
+    branches: [ newbranch ]
+    paths:
+      - 'Dockerfile'
+      - 'index.html'
+      - 'version.txt'
+      - '.github/workflows/docker-build.yml'    
   workflow_dispatch:
     inputs:
       ROLLBACK_CHOICE:
@@ -205,7 +218,7 @@ jobs:
             --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
             --insecure
 
-      - name: Send Failure Email
+      - name: Send Failure Email b
         if: failure()
         run: |
           SUBJECT="GitHub Actions FAILURE: ${{ github.workflow }} #${{ github.run_number }}"
