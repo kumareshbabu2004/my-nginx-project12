@@ -5,8 +5,15 @@ on:
     branches: [main, master]
   workflow_dispatch:
     inputs:
-      rollback_version:
-        description: 'Docker tag to roll back to (e.g., v1.1.0)'
+      ROLLBACK_CHOICE:
+        description: 'Do you want to rollback?'
+        required: true
+        type: choice
+        options:
+          - "no"
+          - "yes"
+      ROLLBACK_VERSION:
+        description: 'If yes, enter version to rollback (e.g., v1.1.0)'
         required: false
 
 jobs:
@@ -140,7 +147,9 @@ jobs:
   rollback:
     name: 🔁 Rollback on Failure or Manual Trigger
     needs: [push, deploy]
-    if: failure() || github.event_name == 'workflow_dispatch'
+    if: >
+      (failure() && github.event_name != 'workflow_dispatch')
+      || (github.event_name == 'workflow_dispatch' && github.event.inputs.ROLLBACK_CHOICE == 'yes')
     runs-on: self-hosted
 
     steps:
@@ -156,8 +165,8 @@ jobs:
       - name: Set rollback version
         id: set_version
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.rollback_version }}" ]; then
-            echo "ROLLBACK_VERSION=${{ github.event.inputs.rollback_version }}" >> $GITHUB_ENV
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.ROLLBACK_CHOICE }}" = "yes" ] && [ -n "${{ github.event.inputs.ROLLBACK_VERSION }}" ]; then
+            echo "ROLLBACK_VERSION=${{ github.event.inputs.ROLLBACK_VERSION }}" >> $GITHUB_ENV
           else
             PREV_TAG=$(cat prev_version.txt)
             echo "ROLLBACK_VERSION=$PREV_TAG" >> $GITHUB_ENV
