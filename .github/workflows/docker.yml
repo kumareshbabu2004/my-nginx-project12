@@ -11,7 +11,7 @@ on:
           - stage
           - prod
       ROLLBACK_CHOICE:
-        description: 'Do you want to rollback?'
+        description: 'Do you want to rollback?' 
         required: true
         type: choice
         options:
@@ -28,7 +28,7 @@ env:
 jobs:
   build:
     if: github.event.inputs.ENVIRONMENT == 'stage'
-    name: 🛠️ Build Docker Image
+    name: 🛠️ Build Docker Image f
     runs-on: self-hosted
     outputs:
       version: ${{ steps.get_version.outputs.version }}
