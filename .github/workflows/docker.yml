@@ -27,8 +27,8 @@ env:
 
 jobs:
   build:
-    if: github.event.inputs.ENVIRONMENT == 'stage'
-    name: 🛠️ Build Docker Image f
+    if: github.event.inputs.ENVIRONMENT == 'stage' || github.event.inputs.ENVIRONMENT == 'prod'
+    name: 🛠️ Build Docker Image
     runs-on: self-hosted
     outputs:
       version: ${{ steps.get_version.outputs.version }}
@@ -83,7 +83,7 @@ jobs:
           path: prev_version.txt
 
   push:
-    if: github.event.inputs.ENVIRONMENT == 'stage'
+    if: github.event.inputs.ENVIRONMENT == 'stage' || github.event.inputs.ENVIRONMENT == 'prod'
     name: 📦 Push to Docker Hub
     needs: build
     runs-on: self-hosted
@@ -113,39 +113,24 @@ jobs:
           docker push ${{ env.DOCKER_REPO }}:${{ needs.build.outputs.version }}
           docker push ${{ env.DOCKER_REPO }}:latest
 
-  deploy-stage:
-    if: github.event.inputs.ENVIRONMENT == 'stage'
-    name: 🚀 Deploy to Stage
+  deploy:
+    name: 🚀 Deploy Container
     needs: push
-    runs-on: self-hosted
+    runs-on: ${{ github.event.inputs.ENVIRONMENT == 'stage' && 'self-hosted' || 'ubuntu-latest' }}
 
     steps:
-      - name: Set stage port
-        run: echo "APP_PORT=81" >> $GITHUB_ENV
-
-      - name: Docker login
-        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-      - name: Deploy stage container
+      - name: Set deployment port
         run: |
-          docker pull ${{ env.DOCKER_REPO }}:latest
-          docker stop myapp || true
-          docker rm myapp || true
-          docker run -d --name myapp -p $APP_PORT:80 ${{ env.DOCKER_REPO }}:latest
-
-  deploy-prod:
-    if: github.event.inputs.ENVIRONMENT == 'prod'
-    name: 🚀 Deploy to Prod
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Set prod port
-        run: echo "APP_PORT=82" >> $GITHUB_ENV
+          if [[ "${{ github.event.inputs.ENVIRONMENT }}" == "prod" ]]; then
+            echo "APP_PORT=82" >> $GITHUB_ENV
+          else
+            echo "APP_PORT=81" >> $GITHUB_ENV
+          fi
 
       - name: Docker login
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Deploy prod container
+      - name: Deploy container
         run: |
           docker pull ${{ env.DOCKER_REPO }}:latest
           docker stop myapp || true
@@ -153,8 +138,7 @@ jobs:
           docker run -d --name myapp -p $APP_PORT:80 ${{ env.DOCKER_REPO }}:latest
 
   rollback:
-    if: >
-      (github.event.inputs.ROLLBACK_CHOICE == 'yes') || failure()
+    if: github.event.inputs.ROLLBACK_CHOICE == 'yes' || failure()
     name: 🔁 Rollback if Needed
     runs-on: ${{ github.event.inputs.ENVIRONMENT == 'stage' && 'self-hosted' || 'ubuntu-latest' }}
 
@@ -188,7 +172,7 @@ jobs:
   notify:
     name: 📧 Send Email Notification
     if: always()
-    needs: [deploy-stage, deploy-prod, rollback]
+    needs: [deploy, rollback]
     runs-on: ${{ github.event.inputs.ENVIRONMENT == 'stage' && 'self-hosted' || 'ubuntu-latest' }}
 
     steps:
@@ -215,11 +199,4 @@ jobs:
           BODY="FAILURE: Deployment failed for commit ${{ github.sha }} in repository ${{ github.repository }}.
           Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          echo -e "Subject: $SUBJECT\nTo: ${{ secrets.TO_EMAIL }}\n\n$BODY" > mail.txt
-
-          curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd \
-            --mail-from "${{ secrets.GMAIL_USER }}" \
-            --mail-rcpt "${{ secrets.TO_EMAIL }}" \
-            --upload-file mail.txt \
-            --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
-            --insecure
+          echo -e "Subject: $SUBJECT\n
