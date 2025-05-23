@@ -1,20 +1,6 @@
-name: Build, Deploy with Rollback and Email Notifications V
+name: Build, Deploy with Rollback and Email Notifications
 
 on:
-  push:
-    branches: [ main, newbranch ]
-    paths:
-      - 'Dockerfile'
-      - 'index.html'
-      - 'version.txt'
-      - '.github/workflows/docker-build.yml'
-  pull_request:
-    branches: [ main, newbranch ]
-    paths:
-      - 'Dockerfile'
-      - 'index.html'
-      - 'version.txt'
-      - '.github/workflows/docker-build.yml'
   workflow_dispatch:
     inputs:
       ENVIRONMENT:
@@ -128,8 +114,8 @@ jobs:
   deploy:
     name: 🚀 Deploy Container
     needs: push
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.ENVIRONMENT != ''
     runs-on: self-hosted
+    if: github.event.inputs.ENVIRONMENT != ''
 
     steps:
       - name: Set port from environment
@@ -153,7 +139,7 @@ jobs:
   rollback:
     name: 🔁 Rollback if Needed
     needs: [push, deploy]
-    if: failure() || (github.event_name == 'workflow_dispatch' && github.event.inputs.ROLLBACK_CHOICE == 'yes')
+    if: failure() || github.event.inputs.ROLLBACK_CHOICE == 'yes'
     runs-on: self-hosted
 
     steps:
@@ -161,9 +147,8 @@ jobs:
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
       - name: Set rollback version
-        id: set_version
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.ROLLBACK_VERSION }}" != "" ]]; then
+          if [[ "${{ github.event.inputs.ROLLBACK_VERSION }}" != "" ]]; then
             echo "ROLLBACK_VERSION=${{ github.event.inputs.ROLLBACK_VERSION }}" >> $GITHUB_ENV
           else
             echo "ROLLBACK_VERSION=$(cat prev_version.txt)" >> $GITHUB_ENV
