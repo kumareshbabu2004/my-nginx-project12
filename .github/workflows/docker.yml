@@ -176,7 +176,7 @@ jobs:
     if: always()
 
     steps:
-      - name: Send Success Email 
+      - name: Send Success Email a
         if: success()
         run: |
           SUBJECT="GitHub Actions SUCCESS: ${{ github.workflow }} #${{ github.run_number }}"
