@@ -1,0 +1,182 @@
+name: Build, Deploy with Rollback and Email Notifications
+
+on:
+  push:
+    branches: [ main, newbranch ]
+    paths:
+      - 'Dockerfile'
+      - 'index.html'
+      - 'version.txt'
+      - '.github/workflows/docker-build.yml'
+  pull_request:
+    branches: [ main, newbranch ]
+    paths:
+      - 'Dockerfile'
+      - 'index.html'
+      - 'version.txt'
+      - '.github/workflows/docker-build.yml'
+  workflow_dispatch:
+    inputs:
+      ROLLBACK_CHOICE:
+        description: 'Do you want to rollback?'
+        required: true
+        type: choice
+        options:
+          - "no"
+          - "yes"
+      ROLLBACK_VERSION:
+        description: 'If yes, enter version to rollback (e.g., v1.1.0)'
+        required: false
+
+env:
+  IMAGE_NAME: my-nginx-app
+  APP_PORT: 81
+  DOCKER_REPO: ${{ secrets.DOCKER_USERNAME }}/my-nginx-app
+
+jobs:
+  build:
+    name: 🛠️ Build Docker Image
+    runs-on: self-hosted
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      previous_version: ${{ steps.get_version.outputs.previous_version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Get latest version and bump
+        id: get_version
+        run: |
+          echo "Fetching tags..."
+          LATEST_TAG=$(curl -s "https://registry.hub.docker.com/v2/repositories/${{ env.DOCKER_REPO }}/tags?page_size=100" | jq -r '.results[].name' | grep '^v' | sort -V | tail -n1)
+          echo "Latest tag: $LATEST_TAG"
+          if [[ -z "$LATEST_TAG" ]]; then
+            NEW_TAG="v1.0.0"
+            PREVIOUS_TAG="v1.0.0"
+          else
+            VERSION=${LATEST_TAG#v}
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+            PATCH=$((PATCH + 1))
+            NEW_TAG="v$MAJOR.$MINOR.$PATCH"
+            PREVIOUS_TAG="$LATEST_TAG"
+          fi
+          echo "version=$NEW_TAG" >> $GITHUB_OUTPUT
+          echo "previous_version=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+          echo "$PREVIOUS_TAG" > prev_version.txt
+
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Build Docker image
+        run: docker build -t ${{ env.DOCKER_REPO }}:${{ steps.get_version.outputs.version }} .
+
+      - name: Tag as latest
+        run: docker tag ${{ env.DOCKER_REPO }}:${{ steps.get_version.outputs.version }} ${{ env.DOCKER_REPO }}:latest
+
+      - name: Save Docker image
+        run: docker save ${{ env.DOCKER_REPO }}:${{ steps.get_version.outputs.version }} ${{ env.DOCKER_REPO }}:latest -o my-nginx-app.tar
+
+      - name: Upload Docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: my-nginx-app.tar
+
+      - name: Upload previous version info
+        uses: actions/upload-artifact@v4
+        with:
+          name: prev-version
+          path: prev_version.txt
+
+  push:
+    name: 📦 Push to Docker Hub
+    needs: build
+    runs-on: self-hosted
+    outputs:
+      version: ${{ needs.build.outputs.version }}
+      previous_version: ${{ needs.build.outputs.previous_version }}
+
+    steps:
+      - name: Download image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Download prev version
+        uses: actions/download-artifact@v4
+        with:
+          name: prev-version
+
+      - name: Load Docker image
+        run: docker load -i my-nginx-app.tar
+
+      - name: Log in to Docker
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Push image
+        run: |
+          docker push ${{ env.DOCKER_REPO }}:${{ needs.build.outputs.version }}
+          docker push ${{ env.DOCKER_REPO }}:latest
+
+  deploy:
+    name: 🚀 Deploy Container
+    needs: push
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: self-hosted
+
+    steps:
+      - name: Log in to Docker
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Pull and run latest image
+        run: |
+          docker pull ${{ env.DOCKER_REPO }}:latest
+          docker stop myapp || true
+          docker rm myapp || true
+          docker run -d --name myapp -p ${{ env.APP_PORT }}:80 ${{ env.DOCKER_REPO }}:latest
+
+  rollback:
+    name: 🔁 Rollback if Needed
+    needs: [push, deploy]
+    if: failure() || (github.event_name == 'workflow_dispatch' && github.event.inputs.ROLLBACK_CHOICE == 'yes')
+    runs-on: self-hosted
+
+    steps:
+      - name: Log in
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Set rollback version
+        id: set_version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.ROLLBACK_VERSION }}" != "" ]]; then
+            echo "ROLLBACK_VERSION=${{ github.event.inputs.ROLLBACK_VERSION }}" >> $GITHUB_ENV
+          else
+            echo "ROLLBACK_VERSION=$(cat prev_version.txt)" >> $GITHUB_ENV
+          fi
+
+      - name: Pull and run rollback
+        run: |
+          docker pull ${{ env.DOCKER_REPO }}:$ROLLBACK_VERSION || true
+          docker stop myapp || true
+          docker rm myapp || true
+          docker run -d --name myapp -p ${{ env.APP_PORT }}:80 ${{ env.DOCKER_REPO }}:$ROLLBACK_VERSION
+
+  notify:
+    name: 📧 Notify Status
+    needs: [deploy, rollback]
+    runs-on: self-hosted
+    if: always()
+
+    steps:
+      - name: Send Success Email
+        if: success()
+        run: |
+          echo -e "Subject: SUCCESS: Deployment\nTo: ${{ secrets.TO_EMAIL }}\n\nDeployment succeeded!" > mail.txt
+          curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd --mail-from "${{ secrets.GMAIL_USER }}" --mail-rcpt "${{ secrets.TO_EMAIL }}" --upload-file mail.txt --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" --insecure
+
+      - name: Send Failure Email
+        if: failure()
+        run: |
+          echo -e "Subject: FAILURE: Deployment\nTo: ${{ secrets.TO_EMAIL }}\n\nDeployment failed!" > mail.txt
+          curl --url 'smtps://smtp.gmail.com:465' --ssl-reqd --mail-from "${{ secrets.GMAIL_USER }}" --mail-rcpt "${{ secrets.TO_EMAIL }}" --upload-file mail.txt --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" --insecure
