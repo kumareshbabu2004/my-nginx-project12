@@ -180,7 +180,7 @@ jobs:
           docker run -d --name myapp -p $APP_PORT:80 ${{ env.DOCKER_REPO }}:$ROLLBACK_VERSION
 
   notify:
-    name: 📧 Send Email Notification
+    name: 📧 Send Email Notification v
     if: always()
     needs: [deploy-stage, deploy-prod, rollback]
     runs-on: ${{ github.event.inputs.ENVIRONMENT == 'stage' && 'self-hosted' || 'ubuntu-latest' }}
