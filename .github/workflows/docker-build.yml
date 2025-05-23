@@ -27,7 +27,7 @@ env:
 
 jobs:
   build:
-    name: 🛠️ Build Docker Image 
+    name: 🛠️ Build Docker Image a
     runs-on: self-hosted
     outputs:
       version: ${{ steps.get_version.outputs.version }}
