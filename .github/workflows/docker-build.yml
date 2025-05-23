@@ -2,19 +2,19 @@ name: Build, Push, Deploy with Rollback and Email Notifications
 
 on:
   push:
-    branches: [ main,newbranch ]
+    branches: [ main, newbranch ]
     paths:
       - 'Dockerfile'
       - 'index.html'
       - 'version.txt'
       - '.github/workflows/docker-build.yml'
   pull_request:
-    branches: [ main,newbranch ]
+    branches: [ main, newbranch ]
     paths:
       - 'Dockerfile'
       - 'index.html'
       - 'version.txt'
-      - '.github/workflows/docker-build.yml'    
+      - '.github/workflows/docker-build.yml'
   workflow_dispatch:
     inputs:
       ROLLBACK_CHOICE:
@@ -28,9 +28,14 @@ on:
         description: 'If yes, enter version to rollback (e.g., v1.1.0)'
         required: false
 
+env:
+  APP_PORT: 81
+  IMAGE_NAME: my-nginx-app
+  DOCKER_REPO: ${{ secrets.DOCKER_USERNAME }}/my-nginx-app
+
 jobs:
   build:
-    name: 🛠️ Build Docker Image and Generate Version Tag 
+    name: 🛠️ Build Docker Image and Generate Version Tag
     runs-on: self-hosted
     outputs:
       version: ${{ steps.get_version.outputs.version }}
@@ -43,9 +48,8 @@ jobs:
       - name: Get Latest Docker Tag and Increment Patch Version
         id: get_version
         run: |
-          REPO="${{ secrets.DOCKER_USERNAME }}/my-nginx-app"
-          echo "Fetching tags for $REPO"
-          LATEST_TAG=$(curl -s "https://registry.hub.docker.com/v2/repositories/$REPO/tags?page_size=100" | \
+          echo "Fetching tags for $DOCKER_REPO"
+          LATEST_TAG=$(curl -s "https://registry.hub.docker.com/v2/repositories/$DOCKER_REPO/tags?page_size=100" | \
             jq -r '.results[].name' | grep '^v' | sort -V | tail -n1)
           echo "Latest tag is $LATEST_TAG"
           if [[ -z "$LATEST_TAG" ]]; then
@@ -72,26 +76,26 @@ jobs:
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
       - name: Build Docker Image
-        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.get_version.outputs.version }} .
+        run: docker build -t $DOCKER_REPO:${{ steps.get_version.outputs.version }} .
 
       - name: Tag image as latest
-        run: docker tag ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.get_version.outputs.version }} ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+        run: docker tag $DOCKER_REPO:${{ steps.get_version.outputs.version }} $DOCKER_REPO:latest
 
       - name: Verify latest tag exists
-        run: docker images | grep ${{ secrets.DOCKER_USERNAME }}/my-nginx-app | grep latest
+        run: docker images | grep $DOCKER_REPO | grep latest
 
       - name: Save Docker Images as Tarball (versioned and latest)
         run: |
           docker save \
-            ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ steps.get_version.outputs.version }} \
-            ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest \
-            -o my-nginx-app.tar
+            $DOCKER_REPO:${{ steps.get_version.outputs.version }} \
+            $DOCKER_REPO:latest \
+            -o $IMAGE_NAME.tar
 
       - name: Upload Docker Image Artifact
         uses: actions/upload-artifact@v4
         with:
           name: docker-image
-          path: my-nginx-app.tar
+          path: $IMAGE_NAME.tar
 
       - name: Upload Previous Version Artifact
         uses: actions/upload-artifact@v4
@@ -119,25 +123,25 @@ jobs:
           name: prev-version
 
       - name: Load Docker Images
-        run: docker load -i my-nginx-app.tar
+        run: docker load -i $IMAGE_NAME.tar
 
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
       - name: Verify images before push
         run: |
-          docker images ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.version }}
-          docker images ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+          docker images $DOCKER_REPO:${{ needs.build.outputs.version }}
+          docker images $DOCKER_REPO:latest
 
       - name: Push Docker Images (versioned & latest)
         run: |
-          docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:${{ needs.build.outputs.version }}
-          docker push ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+          docker push $DOCKER_REPO:${{ needs.build.outputs.version }}
+          docker push $DOCKER_REPO:latest
 
   deploy:
     name: 🚀 Deploy Locally
     needs: push
-    if: github.event_name != 'workflow_dispatch' # Don't run deploy on manual rollback
+    if: github.event_name != 'workflow_dispatch'
     runs-on: self-hosted
 
     steps:
@@ -147,14 +151,14 @@ jobs:
       - name: Pull and Run Latest Image
         run: |
           echo "Pulling latest image..."
-          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+          docker pull $DOCKER_REPO:latest
 
           echo "Stopping and removing current container if exists..."
           docker stop myapp || true
           docker rm myapp || true
 
-          echo "Running new container on port 81..."
-          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:latest
+          echo "Running new container on port $APP_PORT..."
+          docker run -d --name myapp -p $APP_PORT:80 $DOCKER_REPO:latest
 
   rollback:
     name: 🔁 Rollback on Failure or Manual Trigger
@@ -187,12 +191,12 @@ jobs:
       - name: Rollback to Previous Version
         run: |
           echo "Rolling back to $ROLLBACK_VERSION..."
-          docker pull ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$ROLLBACK_VERSION || true
+          docker pull $DOCKER_REPO:$ROLLBACK_VERSION || true
 
           docker stop myapp || true
           docker rm myapp || true
 
-          docker run -d --name myapp -p 81:80 ${{ secrets.DOCKER_USERNAME }}/my-nginx-app:$ROLLBACK_VERSION
+          docker run -d --name myapp -p $APP_PORT:80 $DOCKER_REPO:$ROLLBACK_VERSION
 
   notify:
     name: 📧 Send Email Notification
@@ -217,7 +221,7 @@ jobs:
             --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
             --insecure
 
-      - name: Send Failure Email b
+      - name: Send Failure Email
         if: failure()
         run: |
           SUBJECT="GitHub Actions FAILURE: ${{ github.workflow }} #${{ github.run_number }}"
