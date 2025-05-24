@@ -204,7 +204,7 @@ jobs:
             --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
             --insecure
 
-      - name: Send Failure Email 1
+      - name: Send Failure Email 
         if: failure()
         run: |
           SUBJECT="GitHub Actions FAILURE: ${{ github.workflow }} #${{ github.run_number }}"
