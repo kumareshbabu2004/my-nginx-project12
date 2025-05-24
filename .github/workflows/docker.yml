@@ -63,11 +63,8 @@ jobs:
       - name: Build Docker image
         run: docker build -t ${{ env.DOCKER_REPO }}:${{ steps.get_version.outputs.version }} .
 
-      - name: Tag as latest
-        run: docker tag ${{ env.DOCKER_REPO }}:${{ steps.get_version.outputs.version }} ${{ env.DOCKER_REPO }}:latest
-
       - name: Save Docker image
-        run: docker save ${{ env.DOCKER_REPO }}:${{ steps.get_version.outputs.version }} ${{ env.DOCKER_REPO }}:latest -o my-nginx-app.tar
+        run: docker save ${{ env.DOCKER_REPO }}:${{ steps.get_version.outputs.version }} -o my-nginx-app.tar
 
       - name: Upload Docker image
         uses: actions/upload-artifact@v4
@@ -109,7 +106,6 @@ jobs:
       - name: Push image
         run: |
           docker push ${{ env.DOCKER_REPO }}:${{ needs.build.outputs.version }}
-          docker push ${{ env.DOCKER_REPO }}:latest
 
   deploy:
     name: 🚀 Deploy Based on Environment
@@ -117,36 +113,29 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Docker login
-        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-      - name: Set deploy variables
+      - name: Set port, container name and deploy tag
         run: |
           if [[ "${{ github.event.inputs.ENVIRONMENT }}" == "stage" ]]; then
             echo "APP_PORT=81" >> $GITHUB_ENV
             echo "CONTAINER_NAME=myapp-stage" >> $GITHUB_ENV
-            echo "OTHER_CONTAINER=myapp-prod" >> $GITHUB_ENV
-            echo "DEPLOY_TAG=latest" >> $GITHUB_ENV
+            echo "DEPLOY_TAG=${{ needs.push.outputs.previous_version }}" >> $GITHUB_ENV
           else
             echo "APP_PORT=82" >> $GITHUB_ENV
             echo "CONTAINER_NAME=myapp-prod" >> $GITHUB_ENV
-            echo "OTHER_CONTAINER=myapp-stage" >> $GITHUB_ENV
             echo "DEPLOY_TAG=${{ needs.push.outputs.version }}" >> $GITHUB_ENV
           fi
 
-      - name: Stop and remove other environment container (if exists)
-        run: |
-          docker stop $OTHER_CONTAINER || true
-          docker rm $OTHER_CONTAINER || true
+      - name: Docker login
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      - name: Pull and deploy selected environment container
+      - name: Deploy container
         run: |
           docker pull ${{ env.DOCKER_REPO }}:$DEPLOY_TAG
           docker stop $CONTAINER_NAME || true
           docker rm $CONTAINER_NAME || true
           docker run -d --name $CONTAINER_NAME -p $APP_PORT:80 ${{ env.DOCKER_REPO }}:$DEPLOY_TAG
 
-      - name: Show running containers
+      - name: Confirm container is running
         run: docker ps -a
 
   rollback:
@@ -204,7 +193,7 @@ jobs:
             --user "${{ secrets.GMAIL_USER }}:${{ secrets.GMAIL_PASS }}" \
             --insecure
 
-      - name: Send Failure Email 
+      - name: Send Failure Email
         if: failure()
         run: |
           SUBJECT="GitHub Actions FAILURE: ${{ github.workflow }} #${{ github.run_number }}"
