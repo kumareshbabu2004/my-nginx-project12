@@ -82,7 +82,7 @@ jobs:
           path: prev_version.txt
 
   push:
-    name: 📦 Push to Docker Hub
+    name: 📦 Push to Docker Hub a
     needs: build
     runs-on: self-hosted
     outputs:
